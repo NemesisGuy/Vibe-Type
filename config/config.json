@@ -1,0 +1,8 @@
+{
+    "hotkey": "Ctrl+Shift+Space",
+    "whisper_model": "base",
+    "piper_tts_enabled": true,
+    "ollama_api_url": "http://localhost:11434",
+    "api_key": "YOUR_API_KEY",
+    "language": "en"
+}

@@ -1,0 +1,9 @@
+pysimplegui
+pystray
+pillow
+openai-whisper
+piper-tts
+pynput
+sounddevice
+soundfile
+ollama
