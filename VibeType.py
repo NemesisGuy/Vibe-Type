@@ -1,14 +1,19 @@
 # vibe_type.py
 
 import gui.tray_icon
-
-# TODO: Import other core modules as needed
+import core.hotkey_handler
 
 def main():
     """Main function to start VibeType."""
     print("Starting VibeType...")
-    # TODO: Initialize core components (config, etc.)
+
+    # Start the global hotkey listener
+    core.hotkey_handler.start_hotkey_listener()
+
+    # Create the system tray icon
+    # This is a blocking call that will run until the app exits
     gui.tray_icon.create_tray_icon()
+
     print("VibeType stopped.")
 
 if __name__ == "__main__":

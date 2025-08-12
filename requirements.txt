@@ -6,4 +6,4 @@ piper-tts
 pynput
 sounddevice
 soundfile
-ollama
+pyperclip
