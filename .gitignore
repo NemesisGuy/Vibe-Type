@@ -1,0 +1,185 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+#  Usually these files are written by a PyInstaller script
+#  in a top-level directory.  Adding them here allows folks
+#  to bundle PyInstaller builds into a project, if required.
+#
+# *.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.hypothesis/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static analyzer
+.pytype/
+
+# Caches
+.cache/
+
+
+models/*.bin
+models/*.onnx
+
+
+# Python general
+
+*.pyo
+*.pyd
+
+.venv/
+
+
+# Logs & temp files
+
+*.tmp
+*.swp
+.DS_Store
+
+# Build & packaging
+
+*.spec
+
+# IDE configs
+.vscode/
+.idea/
+
+# Model files (keep repo clean, don't commit heavy stuff)
+models/
+!models/.gitkeep
+
+kokoro_tts/benchmarks/
+kokoro_tts/models/
+
+
+
+
+# Bytecode
+*.pyc
+
+# IDE files
+*.iml
+
+# Audio samples / temp
+*.wav
+
+# Build output
+bin/
+
+*.onnx
+*.bin
+*.onnx.json
+/models/*.onnx
+/models/*.bin
+/models/*.onnx.json
+/benchmarks
+
+*.bin
+*.onnx
+*.onnx.json
+# Python
+__pycache__/
+*.pyc
+
+# Models / large binaries
+models/*.bin
+models/piper/*.onnx
+models/piper/*.onnx.json

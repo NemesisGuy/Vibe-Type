@@ -1,59 +1,87 @@
 # core/audio_capture.py
 
-import sounddevice as sd
-import soundfile as sf
+import pyaudio
+import wave
 import threading
-import queue
+from core.config_manager import load_config
 
-# Global instance to control recording
-recorder = None
+# --- Globals ---
+stop_recording_event = threading.Event()
+recording_thread = None
 
-class AudioRecorder:
-    def __init__(self, filename="temp_recording.wav", samplerate=44100, channels=1):
-        self.filename = filename
-        self.samplerate = samplerate
-        self.channels = channels
-        self.recording = False
-        self.q = queue.Queue()
-        self.thread = None
+# --- Private Functions ---
+def _get_audio_parameters():
+    """Loads audio parameters from the config."""
+    config = load_config()
+    return {
+        "format": pyaudio.paInt16,
+        "channels": 1,
+        "rate": 16000,
+        "chunk_size": 1024,
+        "device_index": config.get('input_device_index')
+    }
 
-    def _rec_thread(self):
-        with sf.SoundFile(self.filename, mode='w', samplerate=self.samplerate, channels=self.channels) as file:
-            with sd.InputStream(samplerate=self.samplerate, channels=self.channels, callback=self._callback):
-                print("Recording started...")
-                self.recording = True
-                while self.recording:
-                    file.write(self.q.get())
-                print("Recording stopped.")
+def _record_audio_task(output_filename: str):
+    """The actual recording task, run in a separate thread."""
+    params = _get_audio_parameters()
+    audio = pyaudio.PyAudio()
+    stream = None
+    wave_file = None
 
-    def _callback(self, indata, frames, time, status):
-        """This is called (from a separate thread) for each audio block."""
-        if status:
-            print(status)
-        self.q.put(indata.copy())
+    try:
+        print(f"Starting recording on device index: {params['device_index']}")
+        stream = audio.open(
+            format=params["format"],
+            channels=params["channels"],
+            rate=params["rate"],
+            input=True,
+            frames_per_buffer=params["chunk_size"],
+            input_device_index=params["device_index"]
+        )
+        
+        wave_file = wave.open(output_filename, 'wb')
+        wave_file.setnchannels(params["channels"])
+        wave_file.setsampwidth(audio.get_sample_size(params["format"]))
+        wave_file.setframerate(params["rate"])
 
-    def start(self):
-        if self.thread is None or not self.thread.is_alive():
-            self.thread = threading.Thread(target=self._rec_thread)
-            self.thread.start()
+        print("Recording started.")
+        while not stop_recording_event.is_set():
+            data = stream.read(params["chunk_size"])
+            wave_file.writeframes(data)
 
-    def stop(self):
-        self.recording = False
-        if self.thread is not None:
-            self.thread.join()
-            self.thread = None
+        print("Recording stopped.")
 
-def start_capture():
-    """Starts audio capture."""
-    global recorder
-    if recorder is None:
-        recorder = AudioRecorder()
-    recorder.start()
+    except Exception as e:
+        print(f"An error occurred during recording: {e}")
+    finally:
+        if stream:
+            stream.stop_stream()
+            stream.close()
+        if audio:
+            audio.terminate()
+        if wave_file:
+            wave_file.close()
+        print(f"Recording saved to {output_filename}")
+
+# --- Public Functions ---
+def start_capture(output_filename: str = "temp_recording.wav"):
+    """Starts the audio recording in a separate thread."""
+    global recording_thread
+    if recording_thread and recording_thread.is_alive():
+        print("Recording is already in progress.")
+        return
+
+    stop_recording_event.clear()
+    recording_thread = threading.Thread(target=_record_audio_task, args=(output_filename,), daemon=True)
+    recording_thread.start()
 
 def stop_capture():
-    """Stops audio capture."""
-    global recorder
-    if recorder is not None:
-        recorder.stop()
-        # To allow for a new recording next time
-        recorder = None
+    """Stops the audio recording."""
+    if not (recording_thread and recording_thread.is_alive()):
+        print("No recording is currently in progress.")
+        return
+
+    stop_recording_event.set()
+    recording_thread.join(timeout=2.0) # Wait for the thread to finish
+    if recording_thread.is_alive():
+        print("Warning: Recording thread did not terminate cleanly.")
