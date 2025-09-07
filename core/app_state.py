@@ -38,7 +38,33 @@ def _update_status(status: str):
     if status_callback:
         status_callback(f"VibeType - {status}")
 
-def _processing_task(is_ai_task: bool):
+def _submit_to_ai(text: str, mode: str):
+    """Helper function to handle the common logic of sending text to the AI and processing the response."""
+    config = load_config()
+    _update_status("AI Processing")
+    active_provider = config.get('active_ai_provider', 'Unknown')
+    increment_usage("ai_provider_usage", active_provider)
+    increment_usage("ai_mode_usage", mode)
+
+    final_text = core.ai.get_ai_response(text, mode=mode)
+    print(f"Final text after AI processing: {final_text}")
+
+    if config.get('enable_text_injection', True):
+        core.text_injection.inject_text(final_text)
+
+    core.clipboard_manager.copy_to_clipboard(final_text)
+    core.transcript_saver.save_transcript(f"Original: {text}\nAI: {final_text}")
+
+    # Use the 'speak_response' setting from the Ollama provider config
+    if config.get('ai_providers', {}).get('Ollama', {}).get('speak_response', True):
+        active_tts_provider = config.get('active_tts_provider', 'Unknown')
+        if config.get('tts_providers', {}).get(active_tts_provider, {}).get('enabled'):
+            _update_status("Speaking")
+            increment_usage("tts_engine_usage", active_tts_provider)
+            text_for_speech = _strip_markdown_for_speech(final_text)
+            core.tts.speak_text(text_for_speech)
+
+def _processing_task(is_ai_task: bool, mode_override: str = None):
     _update_status("Transcribing")
     transcribed_text = core.transcription.transcribe_audio("temp_recording.wav")
     print(f"Transcription result: {transcribed_text}")
@@ -47,124 +73,105 @@ def _processing_task(is_ai_task: bool):
         config = load_config()
         final_text = transcribed_text
 
-        if is_ai_task and config.get('ai_providers', {}).get(config.get('active_ai_provider'), {}).get('enabled'):
-            _update_status("AI Processing")
-            active_provider = config.get('active_ai_provider', 'Unknown')
-            active_mode = config.get('active_prompt', 'Unknown')
-            increment_usage("ai_provider_usage", active_provider)
-            increment_usage("ai_mode_usage", active_mode)
-            final_text = core.ai.get_ai_response(transcribed_text)
-            print(f"Final text after AI processing: {final_text}")
-        
-        if config.get('enable_text_injection', True):
-            core.text_injection.inject_text(final_text)
-        
-        core.clipboard_manager.copy_to_clipboard(final_text)
-        core.transcript_saver.save_transcript(f"Original: {transcribed_text}\nAI: {final_text}")
+        if is_ai_task:
+            mode = mode_override if mode_override else config.get('active_prompt', 'Chat')
+            _submit_to_ai(transcribed_text, mode)
+        else:
+            # Standard dictation: just inject/copy/save/speak the transcript
+            if config.get('enable_text_injection', True):
+                core.text_injection.inject_text(final_text)
+            
+            core.clipboard_manager.copy_to_clipboard(final_text)
+            core.transcript_saver.save_transcript(f"Original: {transcribed_text}")
 
-        if config.get('audio', {}).get('speak_transcription_result', True):
-            active_tts_provider = config.get('active_tts_provider', 'Unknown')
-            if config.get('tts_providers', {}).get(active_tts_provider, {}).get('enabled'):
-                _update_status("Speaking")
-                increment_usage("tts_engine_usage", active_tts_provider)
-                text_for_speech = _strip_markdown_for_speech(final_text)
-                core.tts.speak_text(text_for_speech)
+            if config.get('audio', {}).get('speak_transcription_result', True):
+                active_tts_provider = config.get('active_tts_provider', 'Unknown')
+                if config.get('tts_providers', {}).get(active_tts_provider, {}).get('enabled'):
+                    _update_status("Speaking")
+                    increment_usage("tts_engine_usage", active_tts_provider)
+                    text_for_speech = _strip_markdown_for_speech(final_text)
+                    core.tts.speak_text(text_for_speech)
     
     _update_status("Idle")
     print("Processing thread finished.")
 
-def _speak_clipboard_task():
-    try:
-        clipboard_text = core.clipboard_manager.get_clipboard_content()
-        if clipboard_text:
-            config = load_config()
-            active_tts_provider = config.get('active_tts_provider', 'Unknown')
-            increment_usage("tts_engine_usage", active_tts_provider)
-            text_for_speech = _strip_markdown_for_speech(clipboard_text)
-            print(f"Speaking from clipboard: '{text_for_speech[:50]}...'")
-            _update_status("Speaking")
-            core.tts.speak_text(text_for_speech)
-        else:
-            print("Clipboard is empty or access is disabled. Nothing to speak.")
-        _update_status("Idle")
-    except Exception as e:
-        print(f"Error in speak-from-clipboard task: {e}")
-        _update_status("Idle")
-
-def _read_selected_text_task():
-    """Saves clipboard, copies selected text, speaks it, and restores clipboard."""
+def _read_smart_task():
+    """Saves clipboard, copies selected text, speaks it. If no text is selected, it speaks the original clipboard content."""
     original_clipboard = core.clipboard_manager.get_clipboard_content()
     try:
         core.clipboard_manager.copy_to_clipboard('') # Clear clipboard to ensure we get the new selection
         pyautogui.hotkey('ctrl', 'c')
-        
-        selected_text = None
-        # Robustly wait for the clipboard to update
-        for _ in range(10):
-            time.sleep(0.05)
-            selected_text = core.clipboard_manager.get_clipboard_content()
-            if selected_text:
-                break
+        time.sleep(0.1) # Wait for clipboard to update
+        selected_text = core.clipboard_manager.get_clipboard_content()
 
+        text_to_speak = None
+        source = ""
         if selected_text:
+            text_to_speak = selected_text
+            source = "selected text"
+        elif original_clipboard:
+            text_to_speak = original_clipboard
+            source = "clipboard"
+
+        if text_to_speak:
             config = load_config()
             active_tts_provider = config.get('active_tts_provider', 'Unknown')
             increment_usage("tts_engine_usage", active_tts_provider)
-            text_for_speech = _strip_markdown_for_speech(selected_text)
-            print(f"Reading selected text: '{text_for_speech[:50]}...'")
+            text_for_speech = _strip_markdown_for_speech(text_to_speak)
+            print(f"Reading from {source}: '{text_for_speech[:50]}...'")
             _update_status("Speaking")
             core.tts.speak_text(text_for_speech)
         else:
-            core.tts.speak_text("No text selected or clipboard access disabled.")
+            core.tts.speak_text("No text selected and clipboard is empty.")
         
         time.sleep(1) # Give a moment for speech to start
 
     except Exception as e:
-        print(f"ERROR in read_selected_text_task: {e}")
-        core.tts.speak_text("Error reading selected text.")
+        print(f"ERROR in _read_smart_task: {e}")
+        core.tts.speak_text("Error reading text.")
     finally:
         if original_clipboard is not None:
             core.clipboard_manager.copy_to_clipboard(original_clipboard)
         _update_status("Idle")
 
-def _process_clipboard_task():
+def _process_text_from_selection_or_clipboard_task(mode_override: str = None):
+    """Task to get text from selection or clipboard and process it with AI."""
     try:
-        _update_status("AI Processing Clipboard")
-        clipboard_text = core.clipboard_manager.get_clipboard_content()
-        if not clipboard_text:
-            print("Clipboard is empty or access is disabled. Nothing to process.")
+        # 1. Get text to process
+        original_clipboard = core.clipboard_manager.get_clipboard_content()
+        core.clipboard_manager.copy_to_clipboard('')
+        pyautogui.hotkey('ctrl', 'c')
+        time.sleep(0.1)
+        text_to_process = core.clipboard_manager.get_clipboard_content()
+        source = "selected text"
+
+        # Fallback to clipboard if no text was selected
+        if not text_to_process and original_clipboard:
+            text_to_process = original_clipboard
+            source = "clipboard"
+        
+        # Restore clipboard
+        if original_clipboard is not None:
+            core.clipboard_manager.copy_to_clipboard(original_clipboard)
+
+        if not text_to_process:
+            print("No text selected or in clipboard. Nothing to process.")
             _update_status("Idle")
             return
 
+        # 2. Process it
+        print(f"Processing {source} with AI...")
         config = load_config()
-        active_provider = config.get('active_ai_provider', 'Unknown')
-        active_mode = config.get('active_prompt', 'Unknown')
-        increment_usage("ai_provider_usage", active_provider)
-        increment_usage("ai_mode_usage", active_mode)
-        final_text = core.ai.get_ai_response(clipboard_text)
-        print(f"Final text after AI processing: {final_text}")
-        
-        if config.get('enable_text_injection', True):
-            core.text_injection.inject_text(final_text)
-
-        core.clipboard_manager.copy_to_clipboard(final_text)
-        core.transcript_saver.save_transcript(f"Original: {clipboard_text}\nAI: {final_text}")
-
-        if config.get('audio', {}).get('speak_transcription_result', True):
-            active_tts_provider = config.get('active_tts_provider', 'Unknown')
-            if config.get('tts_providers', {}).get(active_tts_provider, {}).get('enabled'):
-                _update_status("Speaking")
-                increment_usage("tts_engine_usage", active_tts_provider)
-                text_for_speech = _strip_markdown_for_speech(final_text)
-                core.tts.speak_text(text_for_speech)
+        mode = mode_override if mode_override else config.get('active_prompt', 'Chat')
+        _submit_to_ai(text_to_process, mode)
         
         _update_status("Idle")
     except Exception as e:
-        print(f"Error in process-clipboard task: {e}")
+        print(f"Error in _process_text_from_selection_or_clipboard_task: {e}")
         _update_status("Idle")
 
 # --- Public Functions ---
-def toggle_dictation(is_ai_dictation: bool = False):
+def toggle_dictation(is_ai_dictation: bool = False, mode_override: str = None):
     global is_recording, is_ai_dictation_session
     increment_usage("hotkey_usage", "toggle_dictation")
     if not is_recording:
@@ -177,28 +184,46 @@ def toggle_dictation(is_ai_dictation: bool = False):
         print("Stopping dictation...")
         core.audio_capture.stop_capture()
         is_recording = False
-        processing_thread = threading.Thread(target=_processing_task, args=(is_ai_dictation_session,))
+        processing_thread = threading.Thread(target=_processing_task, args=(is_ai_dictation_session, mode_override))
         processing_thread.start()
 
 def speak_from_clipboard():
     increment_usage("hotkey_usage", "speak_from_clipboard")
-    threading.Thread(target=_speak_clipboard_task, daemon=True).start()
+    threading.Thread(target=_read_smart_task, daemon=True).start()
 
 def process_clipboard_with_ai():
+    """Processes selected text or clipboard content with the user's active AI prompt."""
     increment_usage("hotkey_usage", "process_clipboard_with_ai")
-    threading.Thread(target=_process_clipboard_task, daemon=True).start()
+    threading.Thread(target=_process_text_from_selection_or_clipboard_task, args=(None,), daemon=True).start()
 
 def explain_selected_text():
+    """Processes selected text or clipboard content with the 'Explain' AI prompt."""
     increment_usage("hotkey_usage", "explain_selected_text")
-    threading.Thread(target=_process_clipboard_task, daemon=True).start()
+    threading.Thread(target=_process_text_from_selection_or_clipboard_task, args=("Explain",), daemon=True).start()
+
+def summarize_text():
+    """Processes selected text or clipboard content with the 'Summarize' AI prompt."""
+    increment_usage("hotkey_usage", "summarize_text")
+    threading.Thread(target=_process_text_from_selection_or_clipboard_task, args=("Summarize",), daemon=True).start()
+
+def correct_text():
+    """Processes selected text or clipboard content with the 'Correct' AI prompt."""
+    increment_usage("hotkey_usage", "correct_text")
+    threading.Thread(target=_process_text_from_selection_or_clipboard_task, args=("Correct",), daemon=True).start()
 
 def read_selected_text():
     increment_usage("hotkey_usage", "read_selected_text")
-    threading.Thread(target=_read_selected_text_task, daemon=True).start()
+    threading.Thread(target=_read_smart_task, daemon=True).start()
 
 def start_voice_conversation():
+    """Starts a voice conversation using the 'Chat' AI prompt."""
     increment_usage("hotkey_usage", "start_voice_conversation")
-    toggle_dictation(is_ai_dictation=True)
+    toggle_dictation(is_ai_dictation=True, mode_override="Chat")
+
+def interrupt_speech():
+    """Interrupts any ongoing or queued speech."""
+    increment_usage("hotkey_usage", "interrupt_speech")
+    core.tts.stop_speech()
 
 def register_command_queue(q):
     global command_queue

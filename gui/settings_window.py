@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import webbrowser
 import os
+import json
 
 # Import from core
 from core.config_manager import load_config, save_config
@@ -12,9 +13,9 @@ from core.tts import (
     play_test_sound, speak_text, trigger_kokoro_model_download,
     open_benchmark_folder, get_kokoro_models, trigger_kokoro_benchmark,
     test_kokoro_voice, get_piper_model_files, get_voices_for_piper_model,
-    test_sapi_voice, test_piper_voice, test_openai_voice
+    test_sapi_voice, test_piper_voice, test_openai_voice, get_kokoro_languages
 )
-from core.ai import test_ollama_connection, send_webhook_test
+from core.ai import test_ollama_connection, send_webhook_test, get_ai_response, get_ollama_models
 from core.model_manager import delete_piper_model
 from core.transcript_saver import clear_transcript_history
 from core.analytics import load_analytics_data, reset_analytics_data
@@ -120,6 +121,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     kokoro_config = config.get('tts_providers', {}).get('Kokoro TTS', {})
     kokoro_enabled_var = tk.BooleanVar(window, value=kokoro_config.get('enabled', False))
     kokoro_model_file_var = tk.StringVar(window, value=kokoro_config.get('model_file'))
+    kokoro_language_var = tk.StringVar(window, value=kokoro_config.get('language', 'English (US)'))
     kokoro_voice_var = tk.StringVar(window, value=kokoro_config.get('voice'))
 
     piper_config = config.get('tts_providers', {}).get('Piper TTS', {})
@@ -236,13 +238,36 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ollama_frame = ttk.LabelFrame(tabs["🤖 AI"], text="AI Processing (Ollama)", padding="10")
     ollama_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
     ollama_frame.columnconfigure(1, weight=1)
-    ttk.Checkbutton(ollama_frame, text="Enable Ollama AI Processing", variable=ollama_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=5)
+    ttk.Checkbutton(ollama_frame, text="Enable Ollama AI Processing", variable=ollama_enabled_var).grid(row=0, column=0, columnspan=3, sticky="w", padx=5)
     ttk.Label(ollama_frame, text="API URL:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-    ttk.Entry(ollama_frame, textvariable=ollama_url_var).grid(row=1, column=1, sticky="ew", padx=5)
+    ttk.Entry(ollama_frame, textvariable=ollama_url_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=5)
+    
     ttk.Label(ollama_frame, text="Model Name:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
-    ttk.Entry(ollama_frame, textvariable=ollama_model_var).grid(row=2, column=1, sticky="ew", padx=5)
+    model_frame = ttk.Frame(ollama_frame)
+    model_frame.grid(row=2, column=1, columnspan=2, sticky="ew")
+    model_frame.columnconfigure(0, weight=1)
+    ollama_model_menu = ttk.OptionMenu(model_frame, ollama_model_var, ollama_model_var.get() or "Select a model")
+    ollama_model_menu.grid(row=0, column=0, sticky="ew", padx=5)
+
+    def refresh_ollama_models():
+        api_url = ollama_url_var.get()
+        models = get_ollama_models(api_url)
+        menu = ollama_model_menu["menu"]
+        menu.delete(0, "end")
+        if models:
+            for model in models:
+                menu.add_command(label=model, command=lambda value=model: ollama_model_var.set(value))
+            if not ollama_model_var.get() or ollama_model_var.get() not in models:
+                ollama_model_var.set(models[0])
+        else:
+            ollama_model_var.set("No models found")
+
+    refresh_button = ttk.Button(model_frame, text="🔄", command=refresh_ollama_models, width=3)
+    refresh_button.grid(row=0, column=1, padx=(0, 5))
+    refresh_ollama_models() # Initial population
+
     test_button = ttk.Button(ollama_frame, text="Test Connection", command=lambda: test_ollama_connection(ollama_url_var.get()))
-    test_button.grid(row=3, column=0, columnspan=2, pady=5)
+    test_button.grid(row=3, column=0, columnspan=3, pady=5)
 
     ai_modes_frame = ttk.LabelFrame(tabs["🤖 AI"], text="AI Modes", padding="10")
     ai_modes_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
@@ -254,10 +279,10 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ai_mode_tabs = {}
     ai_prompt_entries = {}
     default_prompts = {
-        "Summarize": "Summarize the following text, focusing on the key points and main ideas. Be concise and clear.",
-        "Explain": "Explain the following text in simple and easy-to-understand terms. Use analogies or examples if helpful.",
-        "Correct": "Correct any grammatical errors, spelling mistakes, or typos in the following text. Preserve the original meaning.",
-        "Chat": "You are a helpful AI assistant. Respond to the user's query in a conversational and informative manner."
+        "Summarize": "Summarize the following text, focusing on the key points and main ideas. Be concise and clear. Be concise , your response will be spoken via TTS exactly as you reply",
+        "Explain": "Be concise, you are a helpful ai voice assistant , your response will be spoken via TTS exactly as you reply Explain the following text in simple and easy-to-understand terms. Use analogies or examples if helpful. Be concise , your response will be spoken via TTS exactly as you reply",
+        "Correct": "Correct any grammatical errors, spelling mistakes, or typos in the following text. Preserve the original meaning. Be concise , your response will be spoken via TTS exactly as you reply",
+        "Chat": "You are a helpful AI assistant. Respond to the user's query in a conversational and informative manner. Be concise , your response will be spoken via TTS exactly as you reply"
     }
     for mode in ["Summarize", "Explain", "Correct", "Chat"]:
         tab = ttk.Frame(ai_notebook, padding="10")
@@ -420,15 +445,41 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ttk.Checkbutton(kokoro_main_frame, text="Enable Kokoro TTS", variable=kokoro_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=5)
     ttk.Label(kokoro_main_frame, text="Model File:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
     ttk.OptionMenu(kokoro_main_frame, kokoro_model_file_var, kokoro_model_file_var.get() or "Select a model", *get_kokoro_models()).grid(row=1, column=1, sticky="ew", padx=5)
-    ttk.Label(kokoro_main_frame, text="Voice:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
-    ttk.OptionMenu(kokoro_main_frame, kokoro_voice_var, kokoro_voice_var.get() or "Select a voice", *get_kokoro_voices()).grid(row=2, column=1, sticky="ew", padx=5)
+    
+    ttk.Label(kokoro_main_frame, text="Language:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+    kokoro_lang_menu = ttk.OptionMenu(kokoro_main_frame, kokoro_language_var, kokoro_language_var.get() or "Select a language", *get_kokoro_languages())
+    kokoro_lang_menu.grid(row=2, column=1, sticky="ew", padx=5)
+
+    ttk.Label(kokoro_main_frame, text="Voice:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+    kokoro_voice_menu = ttk.OptionMenu(kokoro_main_frame, kokoro_voice_var, kokoro_voice_var.get() or "Select a voice")
+    kokoro_voice_menu.grid(row=3, column=1, sticky="ew", padx=5)
+
+    def update_kokoro_voices_menu(*args):
+        selected_language = kokoro_language_var.get()
+        voices = get_kokoro_voices(selected_language)
+        
+        kokoro_voice_var.set("")
+        menu = kokoro_voice_menu["menu"]
+        menu.delete(0, "end")
+
+        if voices:
+            for voice in voices:
+                menu.add_command(label=voice, command=lambda v=voice: kokoro_voice_var.set(v))
+            kokoro_voice_var.set(voices[0])
+            kokoro_voice_menu.configure(state="normal")
+        else:
+            kokoro_voice_var.set("No voices for this language")
+            kokoro_voice_menu.configure(state="disabled")
+
+    kokoro_language_var.trace_add("write", update_kokoro_voices_menu)
+    update_kokoro_voices_menu() # Initial population
 
     kokoro_test_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Test Kokoro Voice", padding="10")
     kokoro_test_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
     kokoro_test_frame.columnconfigure(0, weight=1)
-    kokoro_test_text_var = tk.StringVar(window, value="This is a test of the Kokoro text to speech system.")
+    kokoro_test_text_var = tk.StringVar(window, value="The quick brown fox jumps over the lazy dog.")
     ttk.Entry(kokoro_test_frame, textvariable=kokoro_test_text_var).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
-    ttk.Button(kokoro_test_frame, text="Test Voice", command=lambda: test_kokoro_voice(kokoro_test_text_var.get(), kokoro_voice_var.get(), device_index=get_selected_device_index())).grid(row=0, column=1, padx=5, pady=5)
+    ttk.Button(kokoro_test_frame, text="Test Voice", command=lambda: test_kokoro_voice(kokoro_test_text_var.get(), kokoro_language_var.get(), kokoro_voice_var.get(), device_index=get_selected_device_index())).grid(row=0, column=1, padx=5, pady=5)
 
     kokoro_actions_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Actions", padding="10")
     kokoro_actions_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
@@ -587,9 +638,13 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         config.setdefault('tts_providers', {}).setdefault('OpenAI', {})['api_key'] = openai_api_key_var.get()
         config.setdefault('tts_providers', {}).setdefault('OpenAI', {})['voice'] = openai_voice_var.get()
         config.setdefault('tts_providers', {}).setdefault('OpenAI', {})['speed'] = openai_speed_var.get()
-        config.setdefault('tts_providers', {}).setdefault('Kokoro TTS', {})['enabled'] = kokoro_enabled_var.get()
-        config.setdefault('tts_providers', {}).setdefault('Kokoro TTS', {})['model_file'] = kokoro_model_file_var.get()
-        config.setdefault('tts_providers', {}).setdefault('Kokoro TTS', {})['voice'] = kokoro_voice_var.get()
+        
+        kokoro_config_save = config.setdefault('tts_providers', {}).setdefault('Kokoro TTS', {})
+        kokoro_config_save['enabled'] = kokoro_enabled_var.get()
+        kokoro_config_save['model_file'] = kokoro_model_file_var.get()
+        kokoro_config_save['language'] = kokoro_language_var.get()
+        kokoro_config_save['voice'] = kokoro_voice_var.get()
+
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['enabled'] = piper_enabled_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['model'] = piper_model_file_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['voice'] = piper_voice_var.get()

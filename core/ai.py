@@ -5,6 +5,75 @@ from tkinter import messagebox
 import json
 from core.config_manager import load_config
 
+def get_ollama_models(api_url: str) -> list:
+    """Fetches the list of available models from the Ollama API."""
+    if not api_url:
+        messagebox.showerror("Error", "Ollama API URL is not set.")
+        return []
+    try:
+        response = requests.get(f"{api_url}/api/tags", timeout=5)
+        response.raise_for_status()
+        models = response.json().get("models", [])
+        return [model["name"] for model in models]
+    except requests.exceptions.RequestException as e:
+        messagebox.showerror("Connection Error", f"Could not fetch models from Ollama: {e}")
+        return []
+    except json.JSONDecodeError:
+        messagebox.showerror("API Error", "Received an invalid response from the Ollama API.")
+        return []
+
+def get_ai_response(prompt: str, mode: str) -> str:
+    """
+    Sends a prompt to the configured Ollama server using the specified mode's system prompt and returns the AI's response.
+    """
+    config = load_config()
+    ollama_config = config.get('ai_providers', {}).get('Ollama', {})
+
+    if not ollama_config.get('enabled'):
+        return "Ollama is not enabled in the settings."
+
+    api_url = ollama_config.get('api_url')
+    model = ollama_config.get('model')
+    
+    # Get the specific system prompt for the given mode, with a fallback to default prompts
+    default_prompts = {
+        "Summarize": "Summarize the following text, focusing on the key points and main ideas. Be concise and clear. Be concise , your response will be spoken via TTS exactly as you reply",
+        "Explain": "Be concise, you are a helpful ai voice assistant , your response will be spoken via TTS exactly as you reply Explain the following text in simple and easy-to-understand terms. Use analogies or examples if helpful. Be concise , your response will be spoken via TTS exactly as you reply",
+        "Correct": "Correct any grammatical errors, spelling mistakes, or typos in the following text. Preserve the original meaning. Be concise , your response will be spoken via TTS exactly as you reply",
+        "Chat": "You are a helpful AI assistant. Respond to the user's query in a conversational and informative manner. Be concise , your response will be spoken via TTS exactly as you reply"
+    }
+    system_prompt = ollama_config.get('prompts', {}).get(mode, default_prompts.get(mode, ''))
+
+    if not api_url or not model:
+        return "Ollama API URL or model is not configured."
+
+    full_prompt = f"{system_prompt}\n\nUser: {prompt}\nAI:"
+
+    payload = {
+        "model": model,
+        "prompt": full_prompt,
+        "stream": False
+    }
+    
+    try:
+        response = requests.post(f"{api_url}/api/generate", json=payload, timeout=60)
+        response.raise_for_status()
+        
+        response_data = response.json()
+        final_text = response_data.get("response", "").strip()
+        
+        post_to_webhook(final_text, source=f"AI Response ({mode})")
+        return final_text
+
+    except requests.exceptions.RequestException as e:
+        error_message = f"Failed to get response from Ollama: {e}"
+        print(error_message)
+        return error_message
+    except json.JSONDecodeError as e:
+        error_message = f"Failed to decode Ollama response: {e}\nResponse text: {response.text}"
+        print(error_message)
+        return error_message
+
 def test_ollama_connection(api_url: str):
     """Tests the connection to the Ollama API server."""
     config = load_config()

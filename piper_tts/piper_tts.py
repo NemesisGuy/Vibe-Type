@@ -11,29 +11,41 @@ from phonemizer.backend.espeak.wrapper import EspeakWrapper
 import espeakng_loader
 import threading
 import queue
+import logging
 
 _BOS, _EOS, _PAD = "^", "$", "_"
+logger = logging.getLogger(__name__)
 
 class PiperTTS:
     """
     A complete Piper TTS engine for the VibeType application,
     supporting saving, streaming, and true seamless paragraph streaming.
     """
-    def __init__(self, model_path: str, execution_provider: str = 'CPUExecutionProvider'):
+    def __init__(self, model_path: str, execution_provider: str = 'CPU'):
         config_path = f"{model_path}.json"
         if not os.path.exists(model_path): raise FileNotFoundError(f"Model file not found: {model_path}")
         if not os.path.exists(config_path): raise FileNotFoundError(f"Config file not found: {config_path}")
-        print(f"Initializing PiperTTS with model: {os.path.basename(model_path)}")
+        
+        logger.info(f"Initializing PiperTTS with model: {os.path.basename(model_path)}")
         with open(config_path, 'r', encoding='utf-8') as fp:
             self.config: dict = json.load(fp)
+        
         self.sample_rate: int = self.config['audio']['sample_rate']
         self.phoneme_id_map: dict = self.config['phoneme_id_map']
         self._voices: dict = self.config.get('speaker_id_map', {})
+        
         EspeakWrapper.set_library(espeakng_loader.get_library_path())
         EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
-        self.sess = ort.InferenceSession(model_path, providers=[f"{execution_provider}ExecutionProvider"])
+        
+        available_providers = ort.get_available_providers()
+        logger.info(f"PiperTTS available ONNX providers: {available_providers}")
+
+        providers = [f"{execution_provider.upper()}ExecutionProvider"]
+        logger.info(f"Attempting to initialize ONNX session with providers: {providers}")
+        self.sess = ort.InferenceSession(model_path, providers=providers)
+        logger.info(f"Piper TTS engine ready. Using providers: {self.sess.get_providers()}")
+
         self.sess_inputs_names = [i.name for i in self.sess.get_inputs()]
-        print(f"Engine ready. Using: {execution_provider}")
 
     def list_voices(self) -> list[str]:
         """Returns a list of available voices."""

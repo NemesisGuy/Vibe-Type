@@ -4,7 +4,10 @@ import os
 from piper_engine import VibePiperTTS
 
 # --- CONFIGURATION ---
-MODELS_DIR = "../models/piper" # <-- UPDATED PATH TO GO UP ONE LEVEL
+# More robust way to find the models directory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+MODELS_DIR = os.path.join(project_root, "models", "piper")
 
 # --- APPLICATION LOGIC ---
 if __name__ == "__main__":

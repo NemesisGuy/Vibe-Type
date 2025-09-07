@@ -54,12 +54,15 @@ def load_config():
     defaults = {
         "hotkeys": {
             "toggle_dictation": ["<alt>+<caps_lock>"],
-            "speak_clipboard": ["<ctrl>+<alt>+c"],
             "ai_dictation": ["<scroll_lock>"],
             "process_clipboard": ["<ctrl>+<alt>+p"],
             "explain_text": ["<alt>+<ctrl>+e"],
             "read_text": ["<alt>+<ctrl>+s"],
-            "voice_conversation": ["<alt>+<ctrl>+t"]
+            "voice_conversation": ["<alt>+<ctrl>+t"],
+            "summarize_text": ["<ctrl>+<alt>+z"],
+            "correct_text": ["<ctrl>+<alt>+x"],
+            "speak_from_clipboard": ["<ctrl>+<alt>+c"],
+            "interrupt_speech": ["<ctrl>+<alt>+i"]
         },
         
         "active_ai_provider": "Ollama",
@@ -72,7 +75,7 @@ def load_config():
         "tts_providers": {
             "Windows SAPI": {"enabled": True, "voice_index": 0, "rate": 175},
             "OpenAI": {"enabled": False, "api_key": "", "model": "tts-1", "voice": "alloy"},
-            "Kokoro TTS": {"enabled": False, "model_dir": "kokoro_tts/models", "model_file": "kokoro-v1.0.int8.onnx", "voice": "am_adam"},
+            "Kokoro TTS": {"enabled": False, "model_file": "kokoro-v1.0.int8.onnx", "voice": "am_adam"},
             "Piper TTS": {"enabled": False, "model": "en_US-lessac-medium.onnx"}
         },
 
@@ -86,6 +89,7 @@ def load_config():
         
         "hardware": {
             "kokoro_execution_provider": "CPU",
+            "piper_execution_provider": "CPU",
             "whisper_execution_provider": "CPU"
         },
         "history": {

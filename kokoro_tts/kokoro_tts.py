@@ -4,21 +4,22 @@ import numpy as np
 import soundfile as sf
 from typing import List, Dict, Union, Optional
 from kokoro_onnx import Kokoro, Tokenizer
+from misaki import en, ja, espeak, zh
 from pathlib import Path
 import logging
-import asyncio
 import requests
-import time
-import psutil
-import csv
-from datetime import datetime
 from tqdm import tqdm
+import onnxruntime as ort
+import traceback
+import re
+import threading
+import sounddevice as sd
 
 # Import from core
 from core.config_manager import load_config
 
 # Setup logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MODEL_FILES = [
@@ -29,128 +30,185 @@ MODEL_FILES = [
 VOICES_FILE = "voices-v1.0.bin"
 VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/" + VOICES_FILE
 SAMPLE_RATE = 24000
+LANGUAGE_CONFIG = {
+    "English (US)": {"lang_code": "a", "g2p_british": False, "tokenizer_lang": "en-us"},
+    "English (UK)": {"lang_code": "b", "g2p_british": True, "tokenizer_lang": "en-gb"},
+    "Japanese": {"lang_code": "j", "tokenizer_lang": "ja"},
+    "Spanish": {"lang_code": "e", "espeak_lang": "es", "tokenizer_lang": "es"},
+    "French": {"lang_code": "f", "espeak_lang": "fr-fr", "tokenizer_lang": "fr-fr"},
+    "Hindi": {"lang_code": "h", "espeak_lang": "hi", "tokenizer_lang": "hi"},
+    "Italian": {"lang_code": "i", "espeak_lang": "it", "tokenizer_lang": "it"},
+    "Portuguese (BR)": {"lang_code": "p", "espeak_lang": "pt-br", "tokenizer_lang": "pt-br"},
+    "Mandarin Chinese": {"lang_code": "z", "tokenizer_lang": "zh"},
+}
 
 class KokoroTTS:
-    def __init__(self,
-                 model_file: str = "kokoro-v1.0.int8.onnx",
-                 model_dir: str = "kokoro_tts/models",
-                 lang_code: str = "en-us"):
+    def __init__(self, model_file: str = "kokoro-v1.0.fp16.onnx", model_dir: str = "models/kokoro", execution_provider: str = 'CUDA'):
         self.model_dir = Path(model_dir)
         self.model_path = self.model_dir / model_file
         self.voices_path = self.model_dir / VOICES_FILE
-        self.lang_code = lang_code
-        self.benchmark_dir = Path("kokoro_tts/benchmarks")
+        self.benchmark_dir = Path("benchmarks")
         self.benchmark_dir.mkdir(parents=True, exist_ok=True)
-
+        logger.info("KokoroTTS is initializing...")
         self.download_models()
 
-        self.tokenizer = Tokenizer()
-        # Corrected: Removed execution_provider from Kokoro constructor
+        available_providers = ort.get_available_providers()
+        logger.info(f"Available ONNX providers: {available_providers}")
+
         self.kokoro = Kokoro(str(self.model_path), str(self.voices_path))
-        self.available_voices = self.kokoro.get_voices()
-        self.audio_queue = asyncio.Queue(maxsize=20)
-        logger.info(f"KokoroTTS initialized with model: {self.model_path}, voices: {self.voices_path}")
+
+        providers = []
+        if 'CUDAExecutionProvider' in available_providers and execution_provider.upper() == 'CUDA':
+            providers = ['CUDAExecutionProvider']
+        else:
+            logger.warning(f"Provider '{execution_provider}' not available or not selected. Falling back to CPU.")
+            providers = ['CPUExecutionProvider']
+
+        try:
+            self.kokoro.sess = ort.InferenceSession(str(self.model_path), providers=providers)
+        except Exception as e:
+            logger.error(f"Failed to create ONNX session with {providers}. Falling back to CPU. Error: {e}")
+            self.kokoro.sess = ort.InferenceSession(str(self.model_path), providers=['CPUExecutionProvider'])
+
+        self.ALL_VOICES = sorted(self.kokoro.get_voices())
+        self.kokoro_tokenizer = Tokenizer()
+        logger.info(f"KokoroTTS initialized with model: {self.model_path}")
+        logger.info(f"Actively using ONNX providers: {self.kokoro.sess.get_providers()}")
+
+    def _get_g2p_pipeline(self, lang_code: str):
+        logger.info(f"Creating new G2P pipeline for lang_code '{lang_code}'...")
+        config = next((c for c in LANGUAGE_CONFIG.values() if c['lang_code'] == lang_code or c.get('tokenizer_lang') == lang_code), None)
+        if lang_code in ['a', 'b']:
+            return en.G2P(british=config['g2p_british'])
+        elif lang_code == 'j':
+            return ja.JAG2P()
+        elif lang_code == 'z':
+            return zh.ChineseG2P()
+        else:
+            if config and 'espeak_lang' in config:
+                return espeak.EspeakG2P(language=config['espeak_lang'])
+
+        # Fallback for tokenizer_lang codes that don't map to a special G2P pipeline
+        logger.warning(f"No specific G2P pipeline for lang_code '{lang_code}', falling back to kokoro-onnx tokenizer.")
+        return self.kokoro_tokenizer
 
     def download_models(self) -> None:
-        """Download model and voices from GitHub if not present."""
-        config = load_config()
-        if config.get('privacy', {}).get('local_only_mode', False):
-            logger.info("Local-Only Mode is enabled. Skipping model downloads.")
-            return
-
+        try:
+            config = load_config()
+            if config.get('privacy', {}).get('local_only_mode', False):
+                logger.info("Local-Only Mode is enabled. Skipping model downloads.")
+                return
+        except Exception:
+            pass
         self.model_dir.mkdir(parents=True, exist_ok=True)
-
-        for model_info in MODEL_FILES:
-            model_path = self.model_dir / model_info["filename"]
-            if not model_path.exists():
-                logger.info(f"Downloading {model_info['filename']}...")
-                try:
-                    with requests.get(model_info["url"], stream=True) as r:
-                        r.raise_for_status()
-                        total_size = int(r.headers.get('content-length', 0))
-                        with open(model_path, 'wb') as f, tqdm(
-                                total=total_size, unit='iB', unit_scale=True, desc=model_info["filename"]
-                        ) as bar:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                size = f.write(chunk)
-                                bar.update(size)
-                except Exception as e:
-                    logger.error(f"Failed to download {model_info['filename']}: {e}")
-                    raise
-
+        model_info = next((m for m in MODEL_FILES if m['filename'] == self.model_path.name), None)
+        if model_info and not self.model_path.exists():
+            logger.info(f"Downloading {model_info['filename']}...")
+            self._download_file(model_info['url'], self.model_path, model_info['description'])
         if not self.voices_path.exists():
             logger.info(f"Downloading {VOICES_FILE}...")
-            try:
-                with requests.get(VOICES_URL, stream=True) as r:
-                    r.raise_for_status()
-                    with open(self.voices_path, 'wb') as f:
-                        f.write(r.content)
-            except Exception as e:
-                logger.error(f"Failed to download {VOICES_FILE}: {e}")
-                raise
+            self._download_file(VOICES_URL, self.voices_path, "Voices file")
 
-    def _validate_line(self, line: Dict) -> None:
-        if "voice" in line and line["voice"] not in self.available_voices:
-            raise ValueError(f"Invalid voice: {line['voice']} in line: {line['text']}")
-
-    def _chunk_script(self, script: List[Dict], chunk_size: int = 10) -> List[List[Dict]]:
-        return [script[i:i + chunk_size] for i in range(0, len(script), chunk_size)]
-
-    async def _generate_chunk(self, chunk: List[Dict]) -> Optional[np.ndarray]:
+    def _download_file(self, url: str, dest: Path, description: str):
         try:
-            audio_chunks = []
-            for line in chunk:
-                text = line["text"]
-                voice = line.get("voice", "en_us_cmu_arctic_slt")
-                if voice not in self.available_voices:
-                    logger.warning(f"Voice '{voice}' not available. Skipping line: {text[:30]}...")
-                    continue
-
-                phonemes = self.tokenizer.phonemize(text, lang=self.lang_code)
-                if not phonemes:
-                    logger.warning(f"Could not phonemize text: {text[:30]}... Skipping.")
-                    continue
-
-                samples, _ = await asyncio.to_thread(self.kokoro.create, phonemes, voice=voice, is_phonemes=True)
-                if samples is not None:
-                    audio_chunks.append(samples.astype(np.float32))
-            
-            return np.concatenate(audio_chunks) if audio_chunks else None
+            with requests.get(url, stream=True) as r:
+                r.raise_for_status()
+                total_size = int(r.headers.get('content-length', 0))
+                with open(dest, 'wb') as f, tqdm(total=total_size, unit='iB', unit_scale=True, desc=description) as bar:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        size = f.write(chunk)
+                        bar.update(size)
         except Exception as e:
-            logger.error(f"Error in _generate_chunk: {e}")
+            logger.error(f"Failed to download {dest.name}: {e}")
+            if dest.exists():
+                os.remove(dest)
+            raise
+
+    def _synthesize_chunk(self, text: str, language_name: str, voice: str, speed: float = 1.0) -> Optional[np.ndarray]:
+        try:
+            config = LANGUAGE_CONFIG[language_name]
+            lang_code = config["lang_code"]
+            tokenizer_lang = config.get("tokenizer_lang", lang_code)
+            phonemes = None
+            try:
+                g2p = self._get_g2p_pipeline(lang_code)
+                result = g2p(text)
+                if result:
+                    phonemes = result[0] if isinstance(result, tuple) else result
+            except Exception as e:
+                logger.error(f"Misaki phonemizer failed for language '{language_name}'. Error: {e}")
+                logger.info("Attempting to fall back to the built-in Kokoro tokenizer.")
+            if phonemes is None:
+                try:
+                    phonemes = self.kokoro_tokenizer.phonemize(text, lang=tokenizer_lang)
+                    logger.info("Successfully generated phonemes using the built-in Kokoro tokenizer.")
+                except Exception as fallback_e:
+                    logger.error(f"FATAL: Built-in Kokoro tokenizer also failed. Error: {fallback_e}")
+                    return None
+            if not phonemes:
+                logger.warning(f"Could not generate phonemes for sentence: '{text}'")
+                return None
+
+            samples, _ = self.kokoro.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
+            return samples
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during chunk synthesis: {e}")
+            traceback.print_exc()
             return None
 
-    async def _generate_all_chunks_async(self, script: List[Dict], chunk_size: int) -> List[np.ndarray]:
-        chunks = self._chunk_script(script, chunk_size)
-        tasks = [self._generate_chunk(chunk) for chunk in chunks]
-        results = await asyncio.gather(*tasks)
-        return [res for res in results if res is not None and res.size > 0]
+    def stream(self, sentences: List[str], language_name: str, voice: str, speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
+        """Synthesizes and streams audio sentence by sentence."""
+        for sentence in sentences:
+            if interrupt_event and interrupt_event.is_set():
+                logger.info("Stream interrupted.")
+                break
+            
+            if not sentence.strip():
+                continue
 
-    def synthesize_to_memory(self, script: Union[str, List[Dict]], chunk_size: int = 10) -> np.ndarray:
-        try:
-            if isinstance(script, str):
-                script = [{"text": script, "voice": "en_us_cmu_arctic_slt"}]
+            audio_chunk = self._synthesize_chunk(sentence, language_name, voice, speed)
+            
+            if audio_chunk is not None and audio_chunk.size > 0:
+                if interrupt_event and interrupt_event.is_set():
+                    logger.info("Stream interrupted before playing audio chunk.")
+                    break
+                try:
+                    sd.play(audio_chunk, samplerate=SAMPLE_RATE, device=device_index)
+                    sd.wait()
+                except Exception as e:
+                    logger.error(f"Error playing audio chunk: {e}")
+            elif audio_chunk is not None:
+                 logger.warning("Synthesized audio chunk is empty.")
 
-            for line in script:
-                self._validate_line(line)
-
-            audio_segments = asyncio.run(self._generate_all_chunks_async(script, chunk_size))
-
-            if audio_segments:
-                final_audio = np.concatenate(audio_segments)
-                max_val = np.max(np.abs(final_audio))
-                if max_val > 0:
-                    final_audio /= max_val
-                return final_audio
-            else:
-                logger.warning("No audio generated from script.")
-                return np.array([], dtype=np.float32)
-        except Exception as e:
-            logger.error(f"Error during synthesis: {e}")
+    def synthesize_to_memory(self, text: str, language_name: str, voice_name: str, speed: float = 1.0) -> np.ndarray:
+        logger.info(f"Synthesizing: '{text[:50]}...' (Lang: {language_name}, Voice: {voice_name})")
+        sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
+        audio_chunks = []
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            audio_chunk = self._synthesize_chunk(sentence, language_name, voice_name, speed)
+            if audio_chunk is not None:
+                audio_chunks.append(audio_chunk)
+        if not audio_chunks:
+            logger.error("Synthesis failed: No audio could be generated for any sentence.")
             return np.array([], dtype=np.float32)
+        return np.concatenate(audio_chunks)
 
-    def list_voices(self) -> List[str]:
-        return sorted(self.available_voices)
+    def list_languages(self) -> List[str]:
+        return list(LANGUAGE_CONFIG.keys())
+
+    def list_voices(self, language_name: Optional[str] = None) -> List[str]:
+        if not language_name or language_name not in LANGUAGE_CONFIG:
+            return self.ALL_VOICES
+        lang_code = LANGUAGE_CONFIG[language_name]["lang_code"]
+        if lang_code in ['a', 'b']:
+            return self.ALL_VOICES
+        if lang_code == 'j':
+            return [v for v in self.ALL_VOICES if v.startswith('j')]
+        if lang_code == 'z':
+            return [v for v in self.ALL_VOICES if v.startswith('z')]
+        return [v for v in self.ALL_VOICES if not v.startswith(('a', 'b', 'j', 'z'))]
 
     def list_models(self) -> List[str]:
         if not self.model_dir.exists():
@@ -158,15 +216,5 @@ class KokoroTTS:
         return [f.name for f in self.model_dir.glob("*.onnx") if f.is_file()]
 
     def run_benchmark(self, text: str = "This is a benchmark test.", output_file: str = "benchmark_output.wav"):
-        logger.info(f"Running Kokoro TTS benchmark with text: '{text}'")
-        script = [{"text": text, "voice": "en_us_cmu_arctic_slt"}]
-        self.synthesize_wav(script, str(self.benchmark_dir / output_file))
-        logger.info("Benchmark run complete.")
-
-    def synthesize_wav(self, script: Union[str, List[Dict]], output_path: str, chunk_size: int = 10) -> None:
-        final_audio = self.synthesize_to_memory(script, chunk_size)
-        if final_audio.size > 0:
-            sf.write(output_path, final_audio, SAMPLE_RATE)
-            logger.info(f"Audio saved to {output_path}")
-        else:
-            logger.warning("No audio generated, WAV file not created.")
+        logger.info(f"Running benchmark with text: '{text}'")
+        english_voices = self.list_
