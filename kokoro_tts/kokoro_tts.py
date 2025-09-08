@@ -14,6 +14,7 @@ import traceback
 import re
 import threading
 import sounddevice as sd
+from queue import Queue
 
 # Import from core
 from core.config_manager import load_config
@@ -76,7 +77,7 @@ class KokoroTTS:
             self.kokoro.sess = ort.InferenceSession(str(self.model_path), providers=['CPUExecutionProvider'])
 
         self.ALL_VOICES = sorted(self.kokoro.get_voices())
-        self.kokoro_tokenizer = Tokenizer()
+        self.g2p_cache = {}
         logger.info(f"KokoroTTS initialized with model: {self.model_path}")
         logger.info(f"Actively using ONNX providers: {self.kokoro.sess.get_providers()}")
 
@@ -89,21 +90,47 @@ class KokoroTTS:
             return None
 
     def _get_g2p_pipeline(self, lang_code: str):
-        logger.info(f"Creating new G2P pipeline for lang_code '{lang_code}'...")
-        config = next((c for c in LANGUAGE_CONFIG.values() if c['lang_code'] == lang_code or c.get('tokenizer_lang') == lang_code), None)
-        if lang_code in ['a', 'b']:
-            return en.G2P(british=config['g2p_british'])
-        elif lang_code == 'j':
-            return ja.JAG2P()
-        elif lang_code == 'z':
-            return zh.ChineseG2P()
-        else:
-            if config and 'espeak_lang' in config:
-                return espeak.EspeakG2P(language=config['espeak_lang'])
+        """Initializes and caches the correct Misaki G2P pipeline for each language."""
+        if lang_code in self.g2p_cache:
+            return self.g2p_cache[lang_code]
 
-        # Fallback for tokenizer_lang codes that don't map to a special G2P pipeline
-        logger.warning(f"No specific G2P pipeline for lang_code '{lang_code}', falling back to kokoro-onnx tokenizer.")
-        return self.kokoro_tokenizer
+        logger.info(f"Initializing G2P for lang_code '{lang_code}'...")
+        
+        pipeline = None
+        if lang_code == 'j':
+            try:
+                import unidic
+                mecabrc_path = os.path.join(unidic.DICDIR, "mecabrc")
+                if not os.path.exists(mecabrc_path):
+                    raise RuntimeError(
+                        "CRITICAL: Japanese dictionary not found!\n"
+                        f"Required file not found: {mecabrc_path}\n"
+                        "This means the 'unidic' dictionary failed to download during installation.\n"
+                        "Please fix your environment by MANUALLY downloading the dictionary.\n"
+                        "Run this command in your terminal and then restart the application:\n\n"
+                        "    python -m unidic download\n"
+                    )
+                os.environ["MECABRC"] = mecabrc_path
+                pipeline = ja.JAG2P()
+            except ImportError:
+                raise RuntimeError("Japanese support requires 'unidic'. Please run 'pip install misaki[ja]'")
+        
+        elif lang_code in ['a', 'b']:
+            cfg = next((c for c in LANGUAGE_CONFIG.values() if c['lang_code'] == lang_code), None)
+            if cfg:
+                pipeline = en.G2P(british=cfg['g2p_british'])
+        elif lang_code == 'z':
+            pipeline = zh.ZHG2P()
+        else:
+            cfg = next((c for c in LANGUAGE_CONFIG.values() if c['lang_code'] == lang_code), None)
+            if cfg and 'espeak_lang' in cfg:
+                pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
+
+        if pipeline:
+            self.g2p_cache[lang_code] = pipeline
+            return pipeline
+        else:
+            raise RuntimeError(f"Could not initialize G2P pipeline for lang_code '{lang_code}'")
 
     def download_models(self) -> None:
         try:
@@ -127,7 +154,7 @@ class KokoroTTS:
             with requests.get(url, stream=True) as r:
                 r.raise_for_status()
                 total_size = int(r.headers.get('content-length', 0))
-                with open(dest, 'wb') as f, tqdm(total=total_size, unit='iB', unit_scale=True, desc=description) as bar:
+                with open(dest, 'wb') as f, tqdm(total_size, unit='iB', unit_scale=True, desc=description) as bar:
                     for chunk in r.iter_content(chunk_size=8192):
                         size = f.write(chunk)
                         bar.update(size)
@@ -141,27 +168,19 @@ class KokoroTTS:
         try:
             config = LANGUAGE_CONFIG[language_name]
             lang_code = config["lang_code"]
-            tokenizer_lang = config.get("tokenizer_lang", lang_code)
-            phonemes = None
-            try:
-                g2p = self._get_g2p_pipeline(lang_code)
-                result = g2p(text)
-                if result:
-                    phonemes = result[0] if isinstance(result, tuple) else result
-            except Exception as e:
-                logger.error(f"Misaki phonemizer failed for language '{language_name}'. Error: {e}")
-                logger.info("Attempting to fall back to the built-in Kokoro tokenizer.")
-            if phonemes is None:
-                try:
-                    phonemes = self.kokoro_tokenizer.phonemize(text, lang=tokenizer_lang)
-                    logger.info("Successfully generated phonemes using the built-in Kokoro tokenizer.")
-                except Exception as fallback_e:
-                    logger.error(f"FATAL: Built-in Kokoro tokenizer also failed. Error: {fallback_e}")
-                    return None
+            
+            # Step 1: Use the correct, dedicated misaki phonemizer.
+            g2p = self._get_g2p_pipeline(lang_code)
+            
+            # Step 2: Get the phonemes. misaki has different return types, so we handle it.
+            result = g2p(text)
+            phonemes = result[0] if isinstance(result, tuple) else result
+            
             if not phonemes:
                 logger.warning(f"Could not generate phonemes for sentence: '{text}'")
                 return None
 
+            # Step 3: Use the kokoro object to generate audio from the correct phonemes.
             samples, _ = self.kokoro.create(phonemes, voice=voice_or_embedding, speed=speed, is_phonemes=True)
             return samples
         except Exception as e:
@@ -170,32 +189,68 @@ class KokoroTTS:
             return None
 
     def stream(self, sentences: List[str], language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
-        """Synthesizes and streams audio sentence by sentence."""
-        for sentence in sentences:
-            if interrupt_event and interrupt_event.is_set():
-                logger.info("Stream interrupted.")
-                break
-            
-            if not sentence.strip():
-                continue
+        """Synthesizes and streams audio using progressive chunking for responsiveness."""
+        text = " ".join(sentences)
+        self.stream_progressive_chunking(text, language_name, voice_or_embedding, speed, device_index, interrupt_event)
 
-            audio_chunk = self._synthesize_chunk(sentence, language_name, voice_or_embedding, speed)
-            
-            if audio_chunk is not None and audio_chunk.size > 0:
+    def stream_progressive_chunking(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
+        """Synthesizes and streams audio with progressive chunking for responsiveness."""
+        sentences = re.split(r'(?<=[.!?。།、，])\s*', text.replace('\n', ' '))
+        audio_queue = Queue()
+
+        def producer():
+            sentence_idx = 0
+            chunk_size = 1
+            while sentence_idx < len(sentences):
                 if interrupt_event and interrupt_event.is_set():
-                    logger.info("Stream interrupted before playing audio chunk.")
+                    logger.info("Producer interrupted.")
                     break
-                try:
-                    sd.play(audio_chunk, samplerate=SAMPLE_RATE, device=device_index)
-                    sd.wait()
-                except Exception as e:
-                    logger.error(f"Error playing audio chunk: {e}")
-            elif audio_chunk is not None:
-                 logger.warning("Synthesized audio chunk is empty.")
+                
+                chunk_sentences = sentences[sentence_idx:sentence_idx + chunk_size]
+                if not chunk_sentences:
+                    break
+
+                chunk_text = " ".join(chunk_sentences).strip()
+                if not chunk_text:
+                    sentence_idx += chunk_size
+                    continue
+
+                logger.info(f"Synthesizing chunk (size {len(chunk_sentences)}): '{chunk_text[:50]}...'")
+                
+                audio_chunk = self._synthesize_chunk(chunk_text, language_name, voice_or_embedding, speed)
+                
+                if audio_chunk is not None and audio_chunk.size > 0:
+                    audio_queue.put(audio_chunk)
+                
+                sentence_idx += chunk_size
+                chunk_size *= 2  # Double the chunk size for the next iteration
+
+            audio_queue.put(None)  # Sentinel to indicate the end of audio
+
+        producer_thread = threading.Thread(target=producer)
+        producer_thread.start()
+
+        while True:
+            if interrupt_event and interrupt_event.is_set():
+                logger.info("Consumer interrupted.")
+                break
+
+            audio_chunk = audio_queue.get()
+            if audio_chunk is None:
+                break
+
+            try:
+                sd.play(audio_chunk, samplerate=SAMPLE_RATE, device=device_index)
+                sd.wait()
+            except Exception as e:
+                logger.error(f"Error playing audio chunk: {e}")
+                break
+        
+        producer_thread.join()
 
     def synthesize_to_memory(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> np.ndarray:
         logger.info(f"Synthesizing: '{text[:50]}...' (Lang: {language_name})")
-        sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
+        sentences = re.split(r'(?<=[.!?。།、，])\s*', text.replace('\n', ' '))
         audio_chunks = []
         for sentence in sentences:
             if not sentence.strip():

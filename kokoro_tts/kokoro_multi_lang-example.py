@@ -1,4 +1,4 @@
-# Create this file: app.py
+# kokoro_multi_lang-example.py - this is a example of a working lang select, with the japanese ect all working corelky
 import gradio as gr
 import numpy as np
 import os

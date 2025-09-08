@@ -28,3 +28,26 @@ VibeType is more than just a dictation tool. It's a suite of voice-powered utili
 3.  Run `python VibeType.py`.
 4.  Configure your hotkeys, AI provider, and TTS provider from the Settings window.
 
+## Troubleshooting
+
+### Japanese TTS Fails with `MeCab` or `unidic` Error on Windows
+
+If you are using a Japanese voice and encounter an error in the logs related to `MeCab`, `fugashi`, or a `RuntimeError` mentioning `unidic` or `mecabrc not found`, it means the required Japanese dictionary was not installed correctly.
+
+This is a known issue with the `unidic` package on some Windows systems where the dictionary data fails to download during the initial `pip install`.
+
+**Solution:**
+
+The most reliable way to fix this is to manually force the download of the dictionary. Run the following command in your terminal:
+
+```sh
+python -m unidic download
+```
+
+This command will download and install the necessary dictionary files. After the command completes, restart VibeType, and Japanese TTS should work correctly.
+
+If the above command doesn't work, you can also try reinstalling the package while bypassing the `pip` cache, which may be storing a corrupted version:
+
+```sh
+pip install --no-cache-dir --force-reinstall unidic
+```
