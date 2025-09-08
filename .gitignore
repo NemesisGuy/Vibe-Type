@@ -183,3 +183,13 @@ __pycache__/
 models/*.bin
 models/piper/*.onnx
 models/piper/*.onnx.json
+
+#file generated
+*.wav
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv311/
