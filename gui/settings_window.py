@@ -123,6 +123,20 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     kokoro_model_file_var = tk.StringVar(window, value=kokoro_config.get('model_file'))
     kokoro_language_var = tk.StringVar(window, value=kokoro_config.get('language', 'English (US)'))
     kokoro_voice_var = tk.StringVar(window, value=kokoro_config.get('voice'))
+    kokoro_enable_blending_var = tk.BooleanVar(window, value=kokoro_config.get('enable_voice_blending', False))
+    kokoro_voice_2_var = tk.StringVar(window, value=kokoro_config.get('voice_2'))
+    kokoro_voice_3_var = tk.StringVar(window, value=kokoro_config.get('voice_3'))
+    kokoro_voice_4_var = tk.StringVar(window, value=kokoro_config.get('voice_4'))
+    kokoro_voice_5_var = tk.StringVar(window, value=kokoro_config.get('voice_5'))
+    kokoro_enable_voice_2_var = tk.BooleanVar(window, value=kokoro_config.get('enable_voice_2', False))
+    kokoro_enable_voice_3_var = tk.BooleanVar(window, value=kokoro_config.get('enable_voice_3', False))
+    kokoro_enable_voice_4_var = tk.BooleanVar(window, value=kokoro_config.get('enable_voice_4', False))
+    kokoro_enable_voice_5_var = tk.BooleanVar(window, value=kokoro_config.get('enable_voice_5', False))
+    kokoro_voice_weight_1_var = tk.DoubleVar(window, value=kokoro_config.get('voice_weight_1', 1.0))
+    kokoro_voice_weight_2_var = tk.DoubleVar(window, value=kokoro_config.get('voice_weight_2', 1.0))
+    kokoro_voice_weight_3_var = tk.DoubleVar(window, value=kokoro_config.get('voice_weight_3', 1.0))
+    kokoro_voice_weight_4_var = tk.DoubleVar(window, value=kokoro_config.get('voice_weight_4', 1.0))
+    kokoro_voice_weight_5_var = tk.DoubleVar(window, value=kokoro_config.get('voice_weight_5', 1.0))
 
     piper_config = config.get('tts_providers', {}).get('Piper TTS', {})
     piper_enabled_var = tk.BooleanVar(window, value=piper_config.get('enabled', False))
@@ -474,15 +488,96 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     kokoro_language_var.trace_add("write", update_kokoro_voices_menu)
     update_kokoro_voices_menu() # Initial population
 
+    # --- Voice Mixer ---
+    mixer_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Voice Mixer", padding="10")
+    mixer_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
+    mixer_frame.columnconfigure(1, weight=1)
+
+    ttk.Checkbutton(mixer_frame, text="Enable Voice Blending", variable=kokoro_enable_blending_var).grid(row=0, column=0, columnspan=3, sticky="w", padx=5)
+
+    # Voice 1 (Primary)
+    ttk.Label(mixer_frame, text="Primary Voice:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_1_var).grid(row=1, column=1, sticky="ew", padx=5)
+
+    # Voice 2
+    ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_2_var).grid(row=2, column=0, sticky="w", padx=5)
+    kokoro_voice_2_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_2_var, kokoro_voice_2_var.get() or "Select a voice")
+    kokoro_voice_2_menu.grid(row=2, column=1, sticky="ew", padx=5)
+    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_2_var).grid(row=2, column=2, sticky="ew", padx=5)
+
+    # Voice 3
+    ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_3_var).grid(row=3, column=0, sticky="w", padx=5)
+    kokoro_voice_3_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_3_var, kokoro_voice_3_var.get() or "Select a voice")
+    kokoro_voice_3_menu.grid(row=3, column=1, sticky="ew", padx=5)
+    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_3_var).grid(row=3, column=2, sticky="ew", padx=5)
+
+    # Voice 4
+    ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_4_var).grid(row=4, column=0, sticky="w", padx=5)
+    kokoro_voice_4_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_4_var, kokoro_voice_4_var.get() or "Select a voice")
+    kokoro_voice_4_menu.grid(row=4, column=1, sticky="ew", padx=5)
+    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_4_var).grid(row=4, column=2, sticky="ew", padx=5)
+
+    # Voice 5
+    ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_5_var).grid(row=5, column=0, sticky="w", padx=5)
+    kokoro_voice_5_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_5_var, kokoro_voice_5_var.get() or "Select a voice")
+    kokoro_voice_5_menu.grid(row=5, column=1, sticky="ew", padx=5)
+    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_5_var).grid(row=5, column=2, sticky="ew", padx=5)
+
+    def update_mixer_voices_menu(*args):
+        selected_language = kokoro_language_var.get()
+        voices = get_kokoro_voices(selected_language)
+        for menu_var, menu in [(kokoro_voice_2_var, kokoro_voice_2_menu), (kokoro_voice_3_var, kokoro_voice_3_menu), (kokoro_voice_4_var, kokoro_voice_4_menu), (kokoro_voice_5_var, kokoro_voice_5_menu)]:
+            current_voice = menu_var.get()
+            menu["menu"].delete(0, "end")
+            if voices:
+                for voice in voices:
+                    menu["menu"].add_command(label=voice, command=lambda v=voice, m=menu_var: m.set(v))
+                if current_voice in voices:
+                    menu_var.set(current_voice)
+                else:
+                    menu_var.set(voices[0])
+                menu.configure(state="normal")
+            else:
+                menu_var.set("No voices for this language")
+                menu.configure(state="disabled")
+
+    kokoro_language_var.trace_add("write", update_mixer_voices_menu)
+    update_mixer_voices_menu()
+
+    def run_kokoro_test():
+        test_config = {
+            'enable_voice_blending': kokoro_enable_blending_var.get(),
+            'voice': kokoro_voice_var.get(),
+            'voice_weight_1': kokoro_voice_weight_1_var.get(),
+            'enable_voice_2': kokoro_enable_voice_2_var.get(),
+            'voice_2': kokoro_voice_2_var.get(),
+            'voice_weight_2': kokoro_voice_weight_2_var.get(),
+            'enable_voice_3': kokoro_enable_voice_3_var.get(),
+            'voice_3': kokoro_voice_3_var.get(),
+            'voice_weight_3': kokoro_voice_weight_3_var.get(),
+            'enable_voice_4': kokoro_enable_voice_4_var.get(),
+            'voice_4': kokoro_voice_4_var.get(),
+            'voice_weight_4': kokoro_voice_weight_4_var.get(),
+            'enable_voice_5': kokoro_enable_voice_5_var.get(),
+            'voice_5': kokoro_voice_5_var.get(),
+            'voice_weight_5': kokoro_voice_weight_5_var.get(),
+            'language': kokoro_language_var.get()
+        }
+        test_kokoro_voice(
+            kokoro_test_text_var.get(),
+            kokoro_config=test_config,
+            device_index=get_selected_device_index()
+        )
+
     kokoro_test_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Test Kokoro Voice", padding="10")
-    kokoro_test_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
+    kokoro_test_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=5)
     kokoro_test_frame.columnconfigure(0, weight=1)
     kokoro_test_text_var = tk.StringVar(window, value="The quick brown fox jumps over the lazy dog.")
     ttk.Entry(kokoro_test_frame, textvariable=kokoro_test_text_var).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
-    ttk.Button(kokoro_test_frame, text="Test Voice", command=lambda: test_kokoro_voice(kokoro_test_text_var.get(), kokoro_language_var.get(), kokoro_voice_var.get(), device_index=get_selected_device_index())).grid(row=0, column=1, padx=5, pady=5)
+    ttk.Button(kokoro_test_frame, text="Test Voice", command=run_kokoro_test).grid(row=0, column=1, padx=5, pady=5)
 
     kokoro_actions_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Actions", padding="10")
-    kokoro_actions_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
+    kokoro_actions_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=5)
     kokoro_actions_frame.columnconfigure(0, weight=1)
     kokoro_actions_frame.columnconfigure(1, weight=1)
     kokoro_actions_frame.columnconfigure(2, weight=1)
@@ -644,6 +739,20 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         kokoro_config_save['model_file'] = kokoro_model_file_var.get()
         kokoro_config_save['language'] = kokoro_language_var.get()
         kokoro_config_save['voice'] = kokoro_voice_var.get()
+        kokoro_config_save['enable_voice_blending'] = kokoro_enable_blending_var.get()
+        kokoro_config_save['voice_2'] = kokoro_voice_2_var.get()
+        kokoro_config_save['voice_3'] = kokoro_voice_3_var.get()
+        kokoro_config_save['voice_4'] = kokoro_voice_4_var.get()
+        kokoro_config_save['voice_5'] = kokoro_voice_5_var.get()
+        kokoro_config_save['enable_voice_2'] = kokoro_enable_voice_2_var.get()
+        kokoro_config_save['enable_voice_3'] = kokoro_enable_voice_3_var.get()
+        kokoro_config_save['enable_voice_4'] = kokoro_enable_voice_4_var.get()
+        kokoro_config_save['enable_voice_5'] = kokoro_enable_voice_5_var.get()
+        kokoro_config_save['voice_weight_1'] = kokoro_voice_weight_1_var.get()
+        kokoro_config_save['voice_weight_2'] = kokoro_voice_weight_2_var.get()
+        kokoro_config_save['voice_weight_3'] = kokoro_voice_weight_3_var.get()
+        kokoro_config_save['voice_weight_4'] = kokoro_voice_weight_4_var.get()
+        kokoro_config_save['voice_weight_5'] = kokoro_voice_weight_5_var.get()
 
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['enabled'] = piper_enabled_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['model'] = piper_model_file_var.get()

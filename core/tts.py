@@ -230,6 +230,55 @@ def open_benchmark_folder():
     except Exception as e:
         logger.error(f"Could not open benchmarks folder: {e}")
 
+def _get_kokoro_voice_or_embedding_from_config(kokoro_config):
+    """Helper to get the currently configured Kokoro voice, which may be a blend."""
+    if not kokoro_tts_instance:
+        _initialize_kokoro_tts()
+    if not kokoro_tts_instance:
+        logger.error("Kokoro TTS instance is not available.")
+        return None
+
+    voice_or_embedding = None
+    if kokoro_config.get('enable_voice_blending', False):
+        components = []
+        if kokoro_config.get('voice'):
+            components.append({'voice': kokoro_config['voice'], 'weight': kokoro_config.get('voice_weight_1', 1.0)})
+        if kokoro_config.get('enable_voice_2') and kokoro_config.get('voice_2'):
+            components.append({'voice': kokoro_config['voice_2'], 'weight': kokoro_config.get('voice_weight_2', 1.0)})
+        if kokoro_config.get('enable_voice_3') and kokoro_config.get('voice_3'):
+            components.append({'voice': kokoro_config['voice_3'], 'weight': kokoro_config.get('voice_weight_3', 1.0)})
+        if kokoro_config.get('enable_voice_4') and kokoro_config.get('voice_4'):
+            components.append({'voice': kokoro_config['voice_4'], 'weight': kokoro_config.get('voice_weight_4', 1.0)})
+        if kokoro_config.get('enable_voice_5') and kokoro_config.get('voice_5'):
+            components.append({'voice': kokoro_config['voice_5'], 'weight': kokoro_config.get('voice_weight_5', 1.0)})
+
+        if components:
+            logger.info(f"Creating a blended voice from {len(components)} components.")
+            final_embedding = None
+            total_weight = 0
+
+            for component in components:
+                embedding = kokoro_tts_instance.get_voice_embedding(component['voice'])
+                if embedding is not None:
+                    if final_embedding is None:
+                        final_embedding = np.zeros_like(embedding, dtype=np.float32)
+                    
+                    final_embedding += embedding.astype(np.float32) * component['weight']
+                    total_weight += component['weight']
+
+            if total_weight > 0:
+                final_embedding /= total_weight
+                voice_or_embedding = final_embedding
+            else:
+                 voice_or_embedding = kokoro_config.get('voice', 'en_us_cmu_arctic_slt')
+        else:
+            logger.warning("Voice blending is enabled, but no voices were configured for blending. Using primary voice as fallback.")
+            voice_or_embedding = kokoro_config.get('voice', 'en_us_cmu_arctic_slt')
+    else:
+        voice_or_embedding = kokoro_config.get('voice', 'en_us_cmu_arctic_slt')
+
+    return voice_or_embedding
+
 def test_sapi_voice(text: str, voice_index: int, rate: int, volume: int):
     def task():
         if voice_index is None:
@@ -283,23 +332,33 @@ def test_openai_voice(text: str, voice: str, api_key: str, speed: float):
             logger.error(f"An unexpected error occurred during OpenAI voice test: {e}")
     threading.Thread(target=task, daemon=True).start()
 
-def test_kokoro_voice(text: str, language: str, voice: str, device_index: int = None):
-    """A dedicated function to test a specific Kokoro voice on a specific device."""
+def test_kokoro_voice(text: str, kokoro_config: dict, device_index: int = None):
+    """A dedicated function to test a specific Kokoro voice or blend on a specific device."""
     def task():
+        logger.info("--- EXECUTING LATEST test_kokoro_voice FUNCTION (v2) ---")
         _initialize_kokoro_tts()
         if not kokoro_tts_instance:
             logger.error("Kokoro TTS is not initialized. Cannot speak.")
             return
 
-        if not voice:
-            logger.error("No voice selected to test.")
+        language = kokoro_config.get('language', 'English (US)')
+        voice_or_embedding = _get_kokoro_voice_or_embedding_from_config(kokoro_config)
+
+        if voice_or_embedding is None:
+            logger.error("Could not determine a voice or blend to test.")
             return
 
-        logger.info(f"Testing Kokoro voice '{voice}' in '{language}' on device {device_index}: '{text[:50]}...'")
+        # Improved log message
+        log_message_intro = f"Testing Kokoro voice in '{language}' on device {device_index}"
+        if kokoro_config.get('enable_voice_blending') and isinstance(voice_or_embedding, np.ndarray):
+            logger.info(f"{log_message_intro} (blended voice): '{text[:50]}...'")
+        else:
+            logger.info(f"{log_message_intro} ('{kokoro_config.get('voice')}'): '{text[:50]}...' ")
+
         try:
             logger.info(f"Kokoro TTS using providers: {kokoro_tts_instance.kokoro.sess.get_providers()}")
             sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
-            kokoro_tts_instance.stream(sentences, language, voice, 1.0, device_index=device_index, interrupt_event=tts_interrupt_event)
+            kokoro_tts_instance.stream(sentences, language, voice_or_embedding, 1.0, device_index=device_index, interrupt_event=tts_interrupt_event)
         except Exception as e:
             logger.error(f"An unexpected error occurred during Kokoro voice test: {e}")
 
@@ -328,6 +387,7 @@ def test_piper_voice(text: str, model_file: str, voice_name: str = None, length_
         except Exception as e:
             logger.error(f"An unexpected error occurred during Piper voice test: {e}")
     threading.Thread(target=task, daemon=True).start()
+
 
 def _speak_sapi(text: str, config: dict, device_index: int = None):
     try:
@@ -395,14 +455,14 @@ def _speak_kokoro(text: str, config: dict, device_index: int = None):
         language = kokoro_config.get('language', 'English (US)')
         speed = kokoro_config.get('speed', 1.0)
         
-        voice = kokoro_config.get('voice', 'en_us_cmu_arctic_slt')
+        voice_or_embedding = _get_kokoro_voice_or_embedding_from_config(kokoro_config)
 
-        if voice is None:
-            logger.error("Could not determine a voice for Kokoro TTS.")
+        if voice_or_embedding is None:
+            logger.error("Could not determine a voice or blend for Kokoro TTS.")
             return
 
         sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
-        kokoro_tts_instance.stream(sentences, language, voice, speed, device_index=device_index, interrupt_event=tts_interrupt_event)
+        kokoro_tts_instance.stream(sentences, language, voice_or_embedding, speed, device_index=device_index, interrupt_event=tts_interrupt_event)
     except Exception as e:
         logger.error(f"An unexpected error occurred with Kokoro TTS: {e}")
 

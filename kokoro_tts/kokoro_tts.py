@@ -58,8 +58,13 @@ class KokoroTTS:
         self.kokoro = Kokoro(str(self.model_path), str(self.voices_path))
 
         providers = []
-        if 'CUDAExecutionProvider' in available_providers and execution_provider.upper() == 'CUDA':
+        selected_provider = execution_provider.upper()
+        if selected_provider == 'CUDA' and 'CUDAExecutionProvider' in available_providers:
             providers = ['CUDAExecutionProvider']
+        elif selected_provider == 'TENSORRT' and 'TensorrtExecutionProvider' in available_providers:
+            providers = ['TensorrtExecutionProvider']
+        elif selected_provider == 'CPU':
+            providers = ['CPUExecutionProvider']
         else:
             logger.warning(f"Provider '{execution_provider}' not available or not selected. Falling back to CPU.")
             providers = ['CPUExecutionProvider']
@@ -74,6 +79,14 @@ class KokoroTTS:
         self.kokoro_tokenizer = Tokenizer()
         logger.info(f"KokoroTTS initialized with model: {self.model_path}")
         logger.info(f"Actively using ONNX providers: {self.kokoro.sess.get_providers()}")
+
+    def get_voice_embedding(self, voice_name: str) -> Optional[np.ndarray]:
+        """Retrieves the voice embedding for a given voice name."""
+        try:
+            return self.kokoro.get_voice_style(voice_name)
+        except Exception as e:
+            logger.error(f"Could not get embedding for voice '{voice_name}': {e}")
+            return None
 
     def _get_g2p_pipeline(self, lang_code: str):
         logger.info(f"Creating new G2P pipeline for lang_code '{lang_code}'...")
@@ -124,7 +137,7 @@ class KokoroTTS:
                 os.remove(dest)
             raise
 
-    def _synthesize_chunk(self, text: str, language_name: str, voice: str, speed: float = 1.0) -> Optional[np.ndarray]:
+    def _synthesize_chunk(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> Optional[np.ndarray]:
         try:
             config = LANGUAGE_CONFIG[language_name]
             lang_code = config["lang_code"]
@@ -149,14 +162,14 @@ class KokoroTTS:
                 logger.warning(f"Could not generate phonemes for sentence: '{text}'")
                 return None
 
-            samples, _ = self.kokoro.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
+            samples, _ = self.kokoro.create(phonemes, voice=voice_or_embedding, speed=speed, is_phonemes=True)
             return samples
         except Exception as e:
             logger.error(f"An unexpected error occurred during chunk synthesis: {e}")
             traceback.print_exc()
             return None
 
-    def stream(self, sentences: List[str], language_name: str, voice: str, speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
+    def stream(self, sentences: List[str], language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
         """Synthesizes and streams audio sentence by sentence."""
         for sentence in sentences:
             if interrupt_event and interrupt_event.is_set():
@@ -166,7 +179,7 @@ class KokoroTTS:
             if not sentence.strip():
                 continue
 
-            audio_chunk = self._synthesize_chunk(sentence, language_name, voice, speed)
+            audio_chunk = self._synthesize_chunk(sentence, language_name, voice_or_embedding, speed)
             
             if audio_chunk is not None and audio_chunk.size > 0:
                 if interrupt_event and interrupt_event.is_set():
@@ -180,14 +193,14 @@ class KokoroTTS:
             elif audio_chunk is not None:
                  logger.warning("Synthesized audio chunk is empty.")
 
-    def synthesize_to_memory(self, text: str, language_name: str, voice_name: str, speed: float = 1.0) -> np.ndarray:
-        logger.info(f"Synthesizing: '{text[:50]}...' (Lang: {language_name}, Voice: {voice_name})")
+    def synthesize_to_memory(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> np.ndarray:
+        logger.info(f"Synthesizing: '{text[:50]}...' (Lang: {language_name})")
         sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
         audio_chunks = []
         for sentence in sentences:
             if not sentence.strip():
                 continue
-            audio_chunk = self._synthesize_chunk(sentence, language_name, voice_name, speed)
+            audio_chunk = self._synthesize_chunk(sentence, language_name, voice_or_embedding, speed)
             if audio_chunk is not None:
                 audio_chunks.append(audio_chunk)
         if not audio_chunks:
