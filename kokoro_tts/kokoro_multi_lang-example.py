@@ -30,12 +30,12 @@ try:
     print("Loading Kokoro model and voices... This may take a moment.")
     if not os.path.exists(MODEL_PATH): raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
     if not os.path.exists(VOICES_PATH): raise FileNotFoundError(f"Voices not found: {VOICES_PATH}")
-    
+
     # This is the ONLY thing we use kokoro-onnx for.
     kokoro = Kokoro(MODEL_PATH, VOICES_PATH)
     ALL_VOICES = sorted(kokoro.get_voices())
     print(f"Model and {len(ALL_VOICES)} voices loaded successfully.")
-    
+
 except Exception as e:
     raise RuntimeError(f"Failed to initialize the Kokoro library. Error: {e}")
 
@@ -44,7 +44,7 @@ except Exception as e:
 def get_g2p_pipeline(lang_code: str):
     """Initializes and caches the correct Misaki G2P pipeline for each language."""
     if lang_code in g2p_cache: return g2p_cache[lang_code]
-    
+
     print(f"Initializing G2P for lang_code '{lang_code}'...")
     if lang_code in ['a', 'b']:
         cfg = next(c for c in LANGUAGE_CONFIG.values() if c['lang_code'] == lang_code)
@@ -54,7 +54,7 @@ def get_g2p_pipeline(lang_code: str):
     else: # e, f, h, i, p use espeak
         cfg = next(c for c in LANGUAGE_CONFIG.values() if c['lang_code'] == lang_code)
         pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
-        
+
     g2p_cache[lang_code] = pipeline
     return pipeline
 
@@ -74,23 +74,23 @@ def generate_speech(text: str, language_name: str, voice_name: str, speed: float
     try:
         config = LANGUAGE_CONFIG[language_name]
         lang_code = config["lang_code"]
-        
+
         # Step 1: Use the correct, dedicated misaki phonemizer.
         g2p = get_g2p_pipeline(lang_code)
-        
+
         # Step 2: Get the phonemes. misaki has different return types, so we handle it.
         result = g2p(text)
         phonemes = result[0] if isinstance(result, tuple) else result
-        
+
         if not phonemes:
             return (SAMPLE_RATE, np.zeros(0)), "Error: Could not generate phonemes."
-        
+
         # Step 3: Use the kokoro object to generate audio from the correct phonemes.
         samples, _ = kokoro.create(phonemes, voice=voice_name, speed=speed, is_phonemes=True)
-        
+
         if samples.size == 0:
             return (SAMPLE_RATE, np.zeros(0)), "Warning: Generated audio was empty."
-            
+
         return (SAMPLE_RATE, samples), phonemes
     except Exception as e:
         raise gr.Error(str(e))
@@ -111,7 +111,7 @@ with gr.Blocks(title="Kokoro TTS") as app:
         with gr.Column(scale=1):
             audio_output = gr.Audio(label="Generated Speech", autoplay=True)
             phoneme_output = gr.Textbox(label="Generated Phonemes", interactive=False)
-            
+
     app.load(fn=update_voices_and_text, inputs=lang_selector, outputs=[voice_selector, text_input])
     lang_selector.change(fn=update_voices_and_text, inputs=lang_selector, outputs=[voice_selector, text_input])
     generate_button.click(fn=generate_speech, inputs=[text_input, lang_selector, voice_selector, speed_slider], outputs=[audio_output, phoneme_output])
