@@ -3,6 +3,7 @@
 import requests
 from tkinter import messagebox
 import json
+import re # Import the regular expression module
 from core.config_manager import load_config
 
 def get_ollama_models(api_url: str) -> list:
@@ -24,7 +25,7 @@ def get_ollama_models(api_url: str) -> list:
 
 def get_ai_response(prompt: str, mode: str) -> str:
     """
-    Sends a prompt to the configured Ollama server using the specified mode's system prompt and returns the AI's response.
+    Sends a prompt to the configured Ollama server and returns ONLY the final, clean response.
     """
     config = load_config()
     ollama_config = config.get('ai_providers', {}).get('Ollama', {})
@@ -34,34 +35,53 @@ def get_ai_response(prompt: str, mode: str) -> str:
 
     api_url = ollama_config.get('api_url')
     model = ollama_config.get('model')
-    
-    # Get the specific system prompt for the given mode, with a fallback to default prompts
+    show_thought_process = ollama_config.get('show_thought_process', False)
+
     default_prompts = {
-        "Summarize": "Summarize the following text, focusing on the key points and main ideas. Be concise and clear. Be concise , your response will be spoken via TTS exactly as you reply",
-        "Explain": "Be concise, you are a helpful ai voice assistant , your response will be spoken via TTS exactly as you reply Explain the following text in simple and easy-to-understand terms. Use analogies or examples if helpful. Be concise , your response will be spoken via TTS exactly as you reply",
-        "Correct": "Correct any grammatical errors, spelling mistakes, or typos in the following text. Preserve the original meaning. Be concise , your response will be spoken via TTS exactly as you reply",
-        "Chat": "You are a helpful AI assistant. Respond to the user's query in a conversational and informative manner. Be concise , your response will be spoken via TTS exactly as you reply"
+        "Summarize": "Summarize the following text, focusing on the key points and main ideas.",
+        "Explain": "Explain the following text in simple and easy-to-understand terms. Use analogies or examples if helpful.",
+        "Correct": "Correct any grammatical errors, spelling mistakes, or typos in the following text. Preserve the original meaning.",
+        "Chat": "You are a helpful AI assistant. Respond to the user's query in a conversational and informative manner."
     }
-    system_prompt = ollama_config.get('prompts', {}).get(mode, default_prompts.get(mode, ''))
+    base_system_prompt = ollama_config.get('prompts', {}).get(mode, default_prompts.get(mode, ''))
+
+    if show_thought_process:
+        system_prompt = (
+            f"First, think step-by-step inside <think> tags. Then, provide your final, concise answer outside the tags."
+        )
+    else:
+        system_prompt = (
+            f"IMPORTANT: Provide only the final, concise answer. Do not include any preliminary thoughts or XML tags. Your response must be clean, direct, and ready for a Text-to-Speech engine."
+        )
 
     if not api_url or not model:
         return "Ollama API URL or model is not configured."
 
-    full_prompt = f"{system_prompt}\n\nUser: {prompt}\nAI:"
+    full_prompt = f"{base_system_prompt}\n\n{system_prompt}\n\nUser: {prompt}\nAI:"
 
     payload = {
         "model": model,
         "prompt": full_prompt,
         "stream": False
     }
-    
+
     try:
         response = requests.post(f"{api_url}/api/generate", json=payload, timeout=60)
         response.raise_for_status()
-        
+
         response_data = response.json()
-        final_text = response_data.get("response", "").strip()
-        
+        raw_text = response_data.get("response", "").strip()
+
+        # --- DEFINITIVE FIX: Process and clean the text HERE, at the source ---
+        # This robustly finds the closing think tag and takes only the text after it.
+        # This is the only way to guarantee that the rest of the application
+        # NEVER sees the AI's internal monologue.
+        parts = re.split(r'</think.*?>', raw_text, maxsplit=1, flags=re.IGNORECASE | re.DOTALL)
+        if len(parts) > 1:
+            final_text = parts[-1].strip()
+        else:
+            final_text = raw_text # No think tag found, use the whole response
+
         post_to_webhook(final_text, source=f"AI Response ({mode})")
         return final_text
 
@@ -128,7 +148,7 @@ def post_to_webhook(text: str, source: str = "AI Response"):
         return
 
     ollama_config = config.get('ai_providers', {}).get('Ollama', {})
-    
+
     if not ollama_config.get('webhook_enabled', False):
         return
 

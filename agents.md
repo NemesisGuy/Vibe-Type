@@ -29,19 +29,16 @@ It provides hotkey-based, hands-free interaction with transcription (Whisper), A
 
 - `docs/` — Main documentation
 - `models/` — Central directory for all TTS and AI models.
-- `vibetype/` — Application source code
-    - `hotkeys/` — global hotkey system
-    - `tts/` — TTS provider integrations (Piper, Kokoro w/ Misaki, SAPI, OpenAI)
-    - `ai/` — AI provider framework (Ollama, Cohere, etc.)
-    - `ui/` — Settings window, status overlay, tray icon
-    - `automation/` — Webhooks, output routing, integrations
+- `kokoro_tts/` — Advanced, local, multi-language TTS engine with auto-detection.
+- `core/` — Core application logic, including provider management and hotkeys.
+- `gui/` — UI components (Settings, Tray App, etc.).
 - `tests/` — Unit and integration tests
 
 ---
 
 ## 🤖 Agent Behavior Rules
 
-- Always **propose a plan** (`/plan`) before making code changes.
+- Always **propose a plan** before making code changes.
 - Use **small, incremental commits** with clear messages:
     - `feat: add Piper multi-voice support`
     - `fix: correct clipboard privacy toggle`
@@ -64,7 +61,7 @@ It provides hotkey-based, hands-free interaction with transcription (Whisper), A
 1. Add features behind **toggles or settings** where possible.
 2. Ensure **tests exist** for new providers and engines.
 3. Update **docs/** whenever a new feature is added.
-4. Use **local-first defaults** (Whisper, Piper, Ollama).
+4. Use **local-first defaults** (Whisper, Kokoro, Ollama).
 
 ---
 
@@ -85,7 +82,7 @@ UI:
 Core Features:
 - Profiles & Presets
 - Local/External AI & TTS Providers
-- Multi-language TTS support (via Kokoro/Misaki)
+- Advanced multi-language TTS support (via Kokoro/Misaki) with auto-detection.
 - Webhooks for automation
 - Performance dashboard
 - Logging & Monitoring
@@ -107,8 +104,8 @@ Core Features:
 - Before modifying code, **analyze context** (read related files).
 - Keep PRs/commits **focused on a single change**.
 - Always update **feature tracker & docs** when implementing changes.
-- **Kokoro TTS Development**: Remember that `kokoro-onnx` is **only for synthesis**. All phonemization **must** be handled by the `misaki` library, which provides separate G2P pipelines for each language. Do not use the tokenizer from `kokoro-onnx`.
-- **Japanese TTS Dependency**: The `misaki` library's Japanese phonemizer requires the `mecab-python3` and `unidic-lite` packages. Ensure these are included in `requirements.txt` and installed in the environment.
+- **Kokoro TTS Development**: Remember that `kokoro-onnx` is **only for synthesis**. All phonemization **must** be handled by the `misaki` library, which provides separate G2P pipelines for each language. The `KokoroTTS` class now handles auto-detection and robustly wraps the G2P engines to prevent crashes.
+- **Japanese TTS Dependency**: The `misaki` library's Japanese phonemizer requires the `mecab-python3` and `unidic` packages. Ensure these are included in `requirements.txt` and that the `unidic` dictionary is downloaded by running `python -m unidic download`.
 - add comments to each method, please.
 - add comprehensive tests for each feature to prevent regressions. 
 - Always keep a log of attempted fixes and know bugs and solutions.

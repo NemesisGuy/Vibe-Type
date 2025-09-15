@@ -373,8 +373,6 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     reset_button = ttk.Button(stats_frame, text="Reset Statistics", command=handle_reset_analytics)
     reset_button.pack(pady=5)
 
-    populate_analytics_tree()
-
     perf_frame = ttk.LabelFrame(analytics_container, text="Performance Dashboard", padding="10")
     perf_frame.pack(fill="x", expand=True, pady=5)
 
@@ -492,36 +490,67 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     mixer_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Voice Mixer", padding="10")
     mixer_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=5)
     mixer_frame.columnconfigure(1, weight=1)
+    mixer_frame.columnconfigure(2, weight=1)
+    mixer_frame.columnconfigure(3, weight=0)
 
-    ttk.Checkbutton(mixer_frame, text="Enable Voice Blending", variable=kokoro_enable_blending_var).grid(row=0, column=0, columnspan=3, sticky="w", padx=5)
+    ttk.Checkbutton(mixer_frame, text="Enable Voice Blending", variable=kokoro_enable_blending_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=5)
+
+    def _add_linked_entry(parent, var, row, column):
+        string_var = tk.StringVar()
+        entry = ttk.Entry(parent, textvariable=string_var, width=5)
+        entry.grid(row=row, column=column, sticky="w", padx=5)
+
+        def _update_from_entry(event):
+            try:
+                val = float(string_var.get())
+                val = max(0.0, min(1.0, val))
+                var.set(round(val, 2))
+            except (ValueError, tk.TclError):
+                pass # Ignore invalid entries, will be reset by the trace
+            finally:
+                string_var.set(f"{var.get():.2f}")
+        
+        entry.bind("<Return>", _update_from_entry)
+        entry.bind("<FocusOut>", _update_from_entry)
+
+        def _update_entry_from_slider(*args):
+            string_var.set(f"{var.get():.2f}")
+        
+        _update_entry_from_slider()
+        var.trace_add("write", _update_entry_from_slider)
 
     # Voice 1 (Primary)
     ttk.Label(mixer_frame, text="Primary Voice:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_1_var).grid(row=1, column=1, sticky="ew", padx=5)
+    ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_1_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=5)
+    _add_linked_entry(mixer_frame, kokoro_voice_weight_1_var, 1, 3)
 
     # Voice 2
     ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_2_var).grid(row=2, column=0, sticky="w", padx=5)
     kokoro_voice_2_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_2_var, kokoro_voice_2_var.get() or "Select a voice")
     kokoro_voice_2_menu.grid(row=2, column=1, sticky="ew", padx=5)
     ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_2_var).grid(row=2, column=2, sticky="ew", padx=5)
+    _add_linked_entry(mixer_frame, kokoro_voice_weight_2_var, 2, 3)
 
     # Voice 3
     ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_3_var).grid(row=3, column=0, sticky="w", padx=5)
     kokoro_voice_3_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_3_var, kokoro_voice_3_var.get() or "Select a voice")
     kokoro_voice_3_menu.grid(row=3, column=1, sticky="ew", padx=5)
     ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_3_var).grid(row=3, column=2, sticky="ew", padx=5)
+    _add_linked_entry(mixer_frame, kokoro_voice_weight_3_var, 3, 3)
 
     # Voice 4
     ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_4_var).grid(row=4, column=0, sticky="w", padx=5)
     kokoro_voice_4_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_4_var, kokoro_voice_4_var.get() or "Select a voice")
     kokoro_voice_4_menu.grid(row=4, column=1, sticky="ew", padx=5)
     ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_4_var).grid(row=4, column=2, sticky="ew", padx=5)
+    _add_linked_entry(mixer_frame, kokoro_voice_weight_4_var, 4, 3)
 
     # Voice 5
     ttk.Checkbutton(mixer_frame, text="", variable=kokoro_enable_voice_5_var).grid(row=5, column=0, sticky="w", padx=5)
     kokoro_voice_5_menu = ttk.OptionMenu(mixer_frame, kokoro_voice_5_var, kokoro_voice_5_var.get() or "Select a voice")
     kokoro_voice_5_menu.grid(row=5, column=1, sticky="ew", padx=5)
     ttk.Scale(mixer_frame, from_=0, to=1, orient='horizontal', variable=kokoro_voice_weight_5_var).grid(row=5, column=2, sticky="ew", padx=5)
+    _add_linked_entry(mixer_frame, kokoro_voice_weight_5_var, 5, 3)
 
     def update_mixer_voices_menu(*args):
         selected_language = kokoro_language_var.get()

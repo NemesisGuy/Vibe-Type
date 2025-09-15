@@ -1,72 +1,99 @@
-# 1️⃣ Install kokoro
-!pip install -q kokoro>=0.9.4 soundfile
-# 2️⃣ Install espeak, used for English OOD fallback and some non-English languages
-!apt-get -qq -y install espeak-ng > /dev/null 2>&1
+# KokoroTTS Usage Examples
 
-# 3️⃣ Initalize a pipeline
-from kokoro import KPipeline
-from IPython.display import display, Audio
+This document provides clear examples of how to use the `KokoroTTS` class for high-quality, local text-to-speech synthesis.
+
+## Basic Synthesis
+
+This example shows the simplest way to generate speech from a string of text and save it to a file.
+
+```python
+from kokoro_tts import KokoroTTS
 import soundfile as sf
-import torch
-# 🇺🇸 'a' => American English, 🇬🇧 'b' => British English
-# 🇪🇸 'e' => Spanish es
-# 🇫🇷 'f' => French fr-fr
-# 🇮🇳 'h' => Hindi hi
-# 🇮🇹 'i' => Italian it
-# 🇯🇵 'j' => Japanese: pip install misaki[ja]
-# 🇧🇷 'p' => Brazilian Portuguese pt-br
-# 🇨🇳 'z' => Mandarin Chinese: pip install misaki[zh]
-pipeline = KPipeline(lang_code='a') # <= make sure lang_code matches voice, reference above.
 
-# This text is for demonstration purposes only, unseen during training
-text = '''
-The sky above the port was the color of television, tuned to a dead channel.
-"It's not like I'm using," Case heard someone say, as he shouldered his way through the crowd around the door of the Chat. "It's like my body's developed this massive drug deficiency."
-It was a Sprawl voice and a Sprawl joke. The Chatsubo was a bar for professional expatriates; you could drink there for a week and never hear two words in Japanese.
+# 1. Initialize the TTS engine
+# This will download the necessary models on the first run.
+tts = KokoroTTS()
 
-These were to have an enormous impact, not only because they were associated with Constantine, but also because, as in so many other areas, the decisions taken by Constantine (or in his name) were to have great significance for centuries to come. One of the main issues was the shape that Christian churches were to take, since there was not, apparently, a tradition of monumental church buildings when Constantine decided to help the Christian church build a series of truly spectacular structures. The main form that these churches took was that of the basilica, a multipurpose rectangular structure, based ultimately on the earlier Greek stoa, which could be found in most of the great cities of the empire. Christianity, unlike classical polytheism, needed a large interior space for the celebration of its religious services, and the basilica aptly filled that need. We naturally do not know the degree to which the emperor was involved in the design of new churches, but it is tempting to connect this with the secular basilica that Constantine completed in the Roman forum (the so-called Basilica of Maxentius) and the one he probably built in Trier, in connection with his residence in the city at a time when he was still caesar.
+# 2. Define the text and voice
+text = "The sky above the port was the color of television, tuned to a dead channel."
+language = "English (US)"
+voice = "en_us_01" # An example voice
 
-[Kokoro](/kˈOkəɹO/) is an open-weight TTS model with 82 million parameters. Despite its lightweight architecture, it delivers comparable quality to larger models while being significantly faster and more cost-efficient. With Apache-licensed weights, [Kokoro](/kˈOkəɹO/) can be deployed anywhere from production environments to personal projects.
-'''
-# text = '「もしおれがただ偶然、そしてこうしようというつもりでなくここに立っているのなら、ちょっとばかり絶望するところだな」と、そんなことが彼の頭に思い浮かんだ。'
-# text = '中國人民不信邪也不怕邪，不惹事也不怕事，任何外國不要指望我們會拿自己的核心利益做交易，不要指望我們會吞下損害我國主權、安全、發展利益的苦果！'
-# text = 'Los partidos políticos tradicionales compiten con los populismos y los movimientos asamblearios.'
-# text = 'Le dromadaire resplendissant déambulait tranquillement dans les méandres en mastiquant de petites feuilles vernissées.'
-# text = 'ट्रांसपोर्टरों की हड़ताल लगातार पांचवें दिन जारी, दिसंबर से इलेक्ट्रॉनिक टोल कलेक्शनल सिस्टम'
-# text = "Allora cominciava l'insonnia, o un dormiveglia peggiore dell'insonnia, che talvolta assumeva i caratteri dell'incubo."
-# text = 'Elabora relatórios de acompanhamento cronológico para as diferentes unidades do Departamento que propõem contratos.'
+# 3. Generate audio samples to an in-memory NumPy array
+audio_samples = tts.synthesize_to_memory(text, language, voice)
 
-# 4️⃣ Generate, display, and save audio files in a loop.
-generator = pipeline(
-text, voice='af_heart', # <= change voice here
-speed=1, split_pattern=r'\n+'
+# 4. Save the audio to a file
+sf.write("output.wav", audio_samples, tts.SAMPLE_RATE)
+
+print("Audio saved to output.wav")
+```
+
+## Multi-Language Synthesis with Auto-Detect
+
+The `KokoroTTS` engine can automatically detect the language of the input text and switch voices accordingly. This is useful for synthesizing text that contains multiple languages.
+
+```python
+from kokoro_tts import KokoroTTS
+import soundfile as sf
+
+# 1. Initialize the TTS engine
+tts = KokoroTTS()
+
+# 2. Define your multi-language text
+# This example contains English and Japanese.
+text = "Hello world. 「こんにちは、世界」"
+
+# 3. Set the language to "Auto-Detect"
+# The voice you provide will be used for the primary language (English in this case).
+# The engine will automatically select the correct voice for other languages.
+language = "Auto-Detect"
+voice = "en_us_02"
+
+# 4. Generate the audio
+audio_samples = tts.synthesize_to_memory(text, language, voice)
+
+# 5. Save the audio to a file
+sf.write("multi_language_output.wav", audio_samples, tts.SAMPLE_RATE)
+
+print("Multi-language audio saved to multi_language_output.wav")
+```
+
+## Streaming Synthesis
+
+For long passages of text, you can use the `stream` method to start playback immediately while the rest of the audio is generated in the background. This provides a much more responsive experience.
+
+```python
+import threading
+from kokoro_tts import KokoroTTS
+
+# 1. Initialize the TTS engine
+tts = KokoroTTS()
+
+# 2. Define the text and voice
+text = "This is a long passage of text that will be streamed. The first sentence will play almost instantly, while the rest is synthesized in the background. This provides a very responsive user experience."
+language = "English (US)"
+voice = "en_us_03"
+
+# 3. Create an event to allow for interruption (optional)
+interrupt_event = threading.Event()
+
+# 4. Start the stream in a separate thread to avoid blocking
+# The audio will play directly to your default audio device.
+stream_thread = threading.Thread(
+    target=tts.stream,
+    args=(text, language, voice, 1.0, None, interrupt_event)
 )
-# Alternatively, load voice tensor directly:
-# voice_tensor = torch.load('path/to/voice.pt', weights_only=True)
-# generator = pipeline(
-#     text, voice=voice_tensor,
-#     speed=1, split_pattern=r'\n+'
-# )
 
-for i, (gs, ps, audio) in enumerate(generator):
-print(i)  # i => index
-print(gs) # gs => graphemes/text
-print(ps) # ps => phonemes
-display(Audio(data=audio, rate=24000, autoplay=i==0))
-sf.write(f'{i}.wav', audio, 24000) # save each audio file
+print("Starting audio stream...")
+stream_thread.start()
 
-###### muti lang demo text:
+# You can interrupt the speech at any time by setting the event
+# import time
+# time.sleep(3)
+# print("Interrupting speech.")
+# interrupt_event.set()
 
-Japanese. 「もしおれがただ偶然、そしてこうしようというつもりでなくここに立っているのなら、ちょっとばかり絶望するところだな」と、そんなことが彼の頭に思い浮かんだ。
-
-Mandarin Chinese. 中國人民不信邪也不怕邪，不惹事也不怕事，任何外國不要指望我們會拿自己的核心利益做交易，不要指望我們會吞下損害我國主權、安全、發展利益的苦果！
-
-Spanish. Los partidos políticos tradicionales compiten con los populismos y los movimientos asamblearios.
-
-French. Le dromadaire resplendissant déambulait tranquillement dans les méandres en mastiquant de petites feuilles vernissées.
-
-Hindi. ट्रांसपोर्टरों की हड़ताल लगातार पांचवें दिन जारी, दिसंबर से इलेक्ट्रॉनिक टोल कलेक्शनल सिस्टम
-
-Italian. Allora cominciava l'insonnia, o un dormiveglia peggiore dell'insonnia, che talvolta assumeva i caratteri dell'incubo.
-
-Portuguese (BR). Elabora relatórios de acompanhamento cronológico para as diferentes unidades do Departamento que propõem contratos.
+# Wait for the stream to finish
+stream_thread.join()
+print("Stream finished.")
+```

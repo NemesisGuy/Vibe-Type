@@ -13,12 +13,15 @@ The goal of VibeType is to provide a powerful, hands-free interface for interact
 
 ## Key Features
 
-VibeType is more than just a dictation tool. It's a suite of voice-powered utilities. For a full list of features and their hotkeys, please see the [**Features Document**](./FEATURES.md).
+VibeType is more than just a dictation tool. It's a suite of voice-powered utilities. For a full list of features and their hotkeys, please see the [**Features Document**](./docs/FEATURES.md).
 
 *   **Standard Dictation:** Quickly transcribe your speech into any text field.
 *   **Multi-Provider AI Processing:** Use a local LLM (via Ollama) or a powerful external API (like Cohere) to process your speech for tasks like code generation, rephrasing, or command execution.
 *   **Clipboard Processing:** Apply AI transformations (like summarization or correction) to any text on your clipboard using your selected AI provider.
-*   **Multi-Provider Text-to-Speech:** Get audible feedback using the built-in Windows voice, a high-quality external API (like OpenAI), or your own custom local TTS engine (e.g., Kokoro TTS).
+*   **Advanced Multi-Language TTS:** Get audible feedback using the built-in Windows voice, an external API (like OpenAI), or the powerful, local **Kokoro TTS** engine. Kokoro TTS features:
+    *   **Automatic Language Detection:** Speak in multiple languages and have the TTS engine automatically switch voices.
+    *   **Wide Language Support:** High-quality voices for English, Japanese, Spanish, French, Chinese, and more.
+    *   **Voice Blending:** Create unique, custom voices by blending existing ones.
 *   **Customizable AI Modes:** Switch between different AI "personalities" (like Assistant, Corrector, or Summarizer) instantly.
 
 ## Getting Started
@@ -30,24 +33,14 @@ VibeType is more than just a dictation tool. It's a suite of voice-powered utili
 
 ## Troubleshooting
 
-### Japanese TTS Fails with `MeCab` or `unidic` Error on Windows
+### Multi-Language TTS Issues
 
-If you are using a Japanese voice and encounter an error in the logs related to `MeCab`, `fugashi`, or a `RuntimeError` mentioning `unidic` or `mecabrc not found`, it means the required Japanese dictionary was not installed correctly.
+Kokoro TTS relies on a few external dependencies for its powerful multi-language capabilities. If you encounter issues with certain languages, please check the following:
 
-This is a known issue with the `unidic` package on some Windows systems where the dictionary data fails to download during the initial `pip install`.
+*   **Japanese or Chinese:** If you encounter an error in the logs related to `MeCab`, `fugashi`, or a `RuntimeError` mentioning `unidic` or `mecabrc not found`, the required dictionary was not installed correctly. To fix this, run the following command in your terminal:
 
-**Solution:**
+    ```sh
+    python -m unidic download
+    ```
 
-The most reliable way to fix this is to manually force the download of the dictionary. Run the following command in your terminal:
-
-```sh
-python -m unidic download
-```
-
-This command will download and install the necessary dictionary files. After the command completes, restart VibeType, and Japanese TTS should work correctly.
-
-If the above command doesn't work, you can also try reinstalling the package while bypassing the `pip` cache, which may be storing a corrupted version:
-
-```sh
-pip install --no-cache-dir --force-reinstall unidic
-```
+*   **Other Languages (French, Spanish, etc.):** Many other languages are supported via `espeak-ng`. If you have issues with these languages, ensure you have `espeak-ng` installed and accessible in your system's PATH.

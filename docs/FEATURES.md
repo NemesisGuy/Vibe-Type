@@ -62,11 +62,17 @@ Choose the voice you want to hear for audio feedback. All local models should be
     *   **Configuration:** Requires an OpenAI API Key.
 
 *   **Kokoro TTS (Local):**
-    *   **Type:** Custom Local
+    *   **Type:** Advanced Local
     *   **Default:** Disabled
-    *   **Description:** A high-quality, local TTS engine with multi-language support. Requires model files to be placed in the `/models/kokoro` directory.
-    *   **Configuration:** Select the desired model file, language, and primary voice from the settings window.
-    *   **Seamless Streaming:** This engine supports seamless, chunked streaming for a more responsive experience.
+    *   **Description:** A high-quality, local TTS engine with robust multi-language capabilities. Requires model files to be placed in the `/models/kokoro` directory.
+    *   **Configuration:** 
+        *   Select the desired ONNX model file.
+        *   Choose your language. Select **"Auto-Detect"** to have the engine automatically determine the language of the input text (e.g., English, Japanese, Chinese).
+        *   Select a primary voice. The voice dropdown is automatically filtered based on the selected language.
+    *   **Features:**
+        *   **Seamless Streaming:** Supports chunked streaming for a highly responsive experience.
+        *   **Voice Blending:** Create unique, custom voices by mixing the characteristics of existing ones.
+        *   **Wide Language Support:** Includes high-quality voices for English, Japanese, Spanish, French, Mandarin Chinese, and more.
 
 *   **Piper TTS (Local):**
     *   **Type:** Custom Local

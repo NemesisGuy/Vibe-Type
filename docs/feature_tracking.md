@@ -6,11 +6,26 @@ This document tracks the status of features and ongoing development. For informa
 
 ## ✅ Completed Features
 
+- **Web API for System Integration:**
+  - Implemented a Flask-based web server in `api/api.py` to expose core functionalities.
+  - Added initial endpoints for Kokoro TTS, allowing programmatic access to:
+    - `/api/tts/kokoro/languages` (List supported languages)
+    - `/api/tts/kokoro/voices` (List available voices, filter by language)
+    - `/api/tts/kokoro/synthesize` (Generate speech and receive WAV audio)
+  - Created `docs/API.md` to provide detailed documentation for all new endpoints.
+
+- **Advanced Multi-Language TTS & Auto-Detection:**
+  - The **Kokoro TTS** engine now features robust, automatic language detection, allowing for seamless synthesis of mixed-language text (e.g., English and Japanese).
+  - The underlying G2P (grapheme-to-phoneme) process has been completely rewritten to be stable and resilient, eliminating a wide range of crashes related to the `misaki` library.
+  - The voice selection dropdown in the settings is now intelligently filtered based on the selected language.
+  - Supported languages include English (US/UK), Japanese, Spanish, French, Hindi, Italian, Portuguese, and Mandarin Chinese.
+  - **Dependency Note:** Japanese language support now correctly requires the full `unidic` dictionary. It can be installed via `pip install unidic` and then downloaded by running `python -m unidic download`.
+
 - **Responsive Speech System:**
   - Implemented a TTS queuing system to handle speech requests asynchronously, preventing UI freezes.
   - Added a smart chunking mechanism to prioritize the first sentence for immediate playback, improving time-to-first-speech.
   - Introduced a dedicated hotkey (`Ctrl+Alt+I`) to interrupt any ongoing or queued speech.
-  - Refactored TTS providers (Kokoro TTS, Piper TTS) to properly handle the interrupt signal.
+  - Refactored TTS providers to properly handle the interrupt signal.
 
 - **Ollama Model Management & New Hotkeys:**
   - Added a "Refresh Models" button to the AI settings to fetch and display a list of available Ollama models.
@@ -25,22 +40,9 @@ This document tracks the status of features and ongoing development. For informa
   - Ensured that user updates to prompts are saved and correctly applied when the associated hotkey is used.
   - Fixed issues with system prompts for Ollama, ensuring they are correctly passed to the LLM during execution.
 
-- **Kokoro TTS Multi-Language Support & Streaming:**
-  - Integrated the `misaki` library for advanced, multi-language phonemization, with a fallback to the built-in `kokoro-onnx` tokenizer for stability.
-  - Implemented seamless, chunked streaming for Kokoro TTS to provide a more responsive experience.
-  - Added a language selection dropdown in the settings UI for Kokoro TTS.
-  - The voice selection dropdown is now intelligently filtered based on the chosen language.
-  - Supported languages include English (US/UK), Japanese, Spanish, French, Hindi, Italian, Portuguese, and Mandarin Chinese.
-  - **Dependency Note:** Japanese and Chinese language support now correctly includes the `mecab-python3`, `unidic-lite`, and `jieba` packages in `requirements.txt`.
-
-- **Fixed AI and Transcription Modules:**
-  - Restored the `get_ai_response` function in the AI module.
-  - Corrected the logic for locating the `ggml-base.bin` transcription model.
-  - Added a test file for the AI module to ensure its functionality.
-
 - **Fixed GPU Execution for Local TTS:**
-  - **Piper TTS:** Corrected a bug in `core/tts.py` that was preventing the `piper_execution_provider` setting from being read, ensuring the engine now uses the selected hardware.
-  - **Kokoro TTS:** Fixed a crash on startup by correcting a faulty logging statement. The engine now correctly initializes with the selected hardware provider (CPU or CUDA). The underlying `kokoro-onnx` library\'s session is now properly overridden to respect the user\'s hardware choice.
+  - **Piper TTS:** Corrected a bug that prevented the `piper_execution_provider` setting from being used, ensuring the engine now runs on the selected hardware.
+  - **Kokoro TTS:** Resolved a startup crash and ensured the engine correctly initializes with the user-selected hardware provider (CPU or CUDA).
 
 - **Improved Hotkey Functionality:**
   - The "Read Selected Text" and "Speak from Clipboard" hotkeys now have distinct, reliable functions.
