@@ -1,6 +1,16 @@
 # KokoroTTS Usage Examples
 
-This document provides clear examples of how to use the `KokoroTTS` class for high-quality, local text-to-speech synthesis.
+> **Note (2025-09-17):**
+> KokoroTTS now supports robust polyglot (multi-language) synthesis, improved error handling, and optional phoneme logging for each chunk. See FEATURES.md for details.
+
+## Enabling Phoneme Logging
+
+To see the phoneme breakdown for each chunk in your logs, set the following flag in your code:
+
+```python
+from kokoro_tts import KokoroTTS
+KokoroTTS.SHOW_PHONEMES_IN_LOGS = True  # Enable detailed phoneme logging
+```
 
 ## Basic Synthesis
 
@@ -97,3 +107,12 @@ stream_thread.start()
 stream_thread.join()
 print("Stream finished.")
 ```
+
+## Feature Suggestions
+
+- Add examples for:
+  - Real-time language switching and per-language voice selection.
+  - Visualizing phoneme breakdowns in a GUI.
+  - Handling TTS errors and fallbacks in code.
+  - Streaming synthesis with live interruption and log monitoring.
+  - Using the API for batch synthesis and phoneme breakdown.

@@ -1,3 +1,13 @@
+# Test Text for Polyglot TTS
+
+> **Note (2025-09-17):**
+> This file is used to test the improved polyglot TTS and robust selection system. Select any region and use the 'Read Selected Text' hotkey (Ctrl+R) to verify correct language switching, segmentation, and error handling. Watch logs for chunk boundaries and phoneme breakdowns (if enabled).
+
+## How to Use
+- Select a passage or a mix of lines and use Ctrl+R to trigger TTS.
+- Observe logs for selection source, chunk synthesis, and phoneme details.
+- Try edge cases: mixed scripts, punctuation, emoji, and right-to-left text.
+
 Okay, the user wants me to explain the text "中国人民不信邪也不怕邪" in simple, 
 easy-to-understand terms. First, I need to break down the words. "中国人民" is Chinese people, 
 "不信邪" means not believing in the enemy, and "不怕邪" means not afraid of the enemy. 
@@ -17,4 +27,4 @@ afraid of the enemy.
 So the main idea is that the Chinese people are strong and have a 
 strong belief in their own way.
 「もしおれがただ偶然、そしてこうしようというつもりでなくここに立っ Los partidos
-políticos tradicionales compiten con los populismos y lo
+políticos tradicionales compiten con los populismos y

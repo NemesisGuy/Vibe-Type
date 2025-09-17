@@ -98,3 +98,27 @@ Select an active prompt to change the AI's "personality" and tell it what kind o
 All hotkeys, provider settings (API keys, URLs, models), and AI prompts can be fully customized in the **Settings** window. VibeType now features a dedicated **Prompts** settings page, allowing you to create, edit, and save unique prompts for each operational mode.
 
 When a hotkey is used, the associated prompt is passed to the Ollama LLM, ensuring that your custom instructions are applied correctly. This allows you to tailor the AI's behavior to your specific needs, whether you're correcting dictation, summarizing text, or engaging in a voice conversation.
+
+## Recent Improvements (2025-09-17)
+
+- **Polyglot TTS Robustness:**
+  - Seamless reading of mixed-language passages (English, Chinese, Japanese, Spanish, etc.) with automatic language detection and correct voice switching.
+  - Improved segmentation: Latin (including accented) runs are kept together, punctuation is attached to the previous segment, and short runs default to English.
+  - G2P failures are now handled gracefully; problematic chunks are skipped, not crashed.
+  - Clipboard/selection capture is now robust: polls for up to 0.5s, logs raw and sanitized selection, and falls back to clipboard if needed.
+  - Log lines and token dumps are stripped before TTS, so logs are never spoken.
+  - New: Optional phoneme logging for each chunk (see kokoro_tts.py: SHOW_PHONEMES_IN_LOGS).
+
+## Feature Suggestions
+
+- **Real-time language switching in the UI:** Show detected language and allow user override per segment.
+- **User-configurable phoneme logging level:** Toggle phoneme/token logging from the GUI.
+- **Visual feedback for language detection:** Highlight or color-code detected languages in the UI.
+- **Per-language voice selection:** Let users assign a different voice for each language.
+- **TTS output waveform preview:** Show a live waveform or spectrogram as speech is generated.
+- **Automatic fallback to another TTS engine:** If one engine fails, try the next available provider.
+- **User-editable pronunciation dictionary:** Let users override G2P for specific words.
+- **Cross-platform clipboard/selection capture:** Improve selection logic for Linux/Mac.
+- **Browser extension integration:** Read web pages aloud directly from the browser.
+- **API endpoint for batch TTS jobs:** Submit multiple texts for synthesis in one call.
+- **GUI for viewing/exporting phoneme breakdowns:** Let users see and export the phoneme sequence for any passage.

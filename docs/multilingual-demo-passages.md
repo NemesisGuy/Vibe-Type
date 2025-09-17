@@ -1,5 +1,13 @@
 # multilingual demo passages
 
+> **Note (2025-09-17):**
+> These passages are designed to test the new polyglot TTS system. The engine now robustly detects and switches languages, handles edge cases, and logs phoneme breakdowns if enabled. Use these passages to verify correct language switching, segmentation, and error handling.
+
+## How to Use
+- Select a passage (or a mix of passages) in your editor and use the 'Read Selected Text' hotkey (Ctrl+R).
+- Watch the logs for chunk boundaries, language detection, and (if enabled) phoneme breakdowns.
+- Try edge cases: mixed scripts, punctuation, emoji, and right-to-left text.
+
 ## Japanese
 「もしおれがただ偶然、そしてこうしようというつもりでなくここに立っているのなら、ちょっとばかり絶望するところだな」と、そんなことが彼の頭に思い浮かんだ。彼は辺りを見回し、この奇妙な場所に自分がなぜ導かれたのかを考えた。遠くには古い神社の屋根が見え、鈴の音がかすかに風に混じって聞こえてきた。人影はなく、ただ蝉の声が夏の午後を満たしていた。心の奥底に、これは偶然ではなく何か大きな意味を持っているのではないか、という直感が芽生えていた。
 
@@ -13,7 +21,7 @@ Los partidos políticos tradicionales compiten con los populismos y los movimien
 Le dromadaire resplendissant déambulait tranquillement dans les méandres en mastiquant de petites feuilles vernissées. Autour de lui, le désert s’étendait à perte de vue, mais de temps à autre surgissait une oasis où l’on apercevait des palmiers courbés et des flaques d’eau scintillantes. Les voyageurs le suivaient en silence, fascinés par sa lenteur majestueuse et la régularité de son pas. Ce rythme constant, presque hypnotique, leur permettait de traverser des étendues arides sans céder au désespoir. Dans le ciel, le soleil flamboyant se couchait, projetant une lumière dorée qui enveloppait le paysage d’une aura presque sacrée.
 
 ## Hindi
-ट्रांसपोर्टरों की हड़ताल लगातार पांचवें दिन जारी है, और इसके कारण पूरे राज्य में माल की आवाजाही ठप पड़ी हुई है। व्यापारी संघों का कहना है कि आवश्यक वस्तुओं की आपूर्ति प्रभावित होने लगी है और अगर स्थिति जल्दी नहीं सुधरी तो आम जनता को गंभीर कठिनाइयों का सामना करना पड़ेगा। हड़ताल का मुख्य कारण दिसंबर से लागू होने वाला इलेक्ट्रॉनिक टोल कलेक्शनल सिस्टम बताया जा रहा है। परिवहन कंपनियों का कहना है कि यह प्रणाली उनके लिए अतिरिक्त बोझ बनेगी और संचालन लागत को बढ़ा देगी। सरकार और यूनियनों के बीच कई दौर की वार्ता हो चुकी है, लेकिन अब तक कोई ठोस समाधान नहीं निकल सका है।
+ट्रांसपोर्टरों की हड़ताल लगातार पांचवे दिन जारी है, और इसके कारण पूरे राज्य में माल की आवाजाही ठप पड़ी हुई है। व्यापारी संघों का कहना है कि आवश्यक वस्तुओं की आपूर्ति प्रभावित होने लगी है और अगर स्थिति जल्दी नहीं सुधरी तो आम जनता को गंभीर कठिनाइयों का सामना करना पड़ेगा। हड़ताल का मुख्य कारण दिसंबर से लागू होने वाला इलेक्ट्रॉनिक टोल कलेक्शनल सिस्टम बताया जा रहा है। परिवहन कंपनियों का कहना है कि यह प्रणाली उनके लिए अतिरिक्त बोझ बनेगी और संचालन लागत को बढ़ा देगी। सरकार और यूनियनों के बीच कई दौर की वार्ता हो चुकी है, लेकिन अब तक कोई ठोस समाधान नहीं निकल सका है।
 
 ## Italian
 Allora cominciava l'insonnia, o un dormiveglia peggiore dell'insonnia, che talvolta assumeva i caratteri dell'incubo. Ogni notte, le stesse ombre sembravano danzare sulle pareti della stanza, e il ticchettio dell’orologio diventava un suono ossessivo che scandiva la sua inquietudine. Cercava conforto nei libri, nella musica, persino nelle passeggiate notturne lungo le strade deserte, ma nulla riusciva a placare quel tormento interiore. Con il passare dei mesi, la stanchezza si trasformò in una compagnia costante, erodendo la sua capacità di distinguere la realtà dal sogno. In quel fragile equilibrio, trovò paradossalmente la forza di continuare.
@@ -31,3 +39,11 @@ Wait, but how to explain that in simple terms? Maybe use an analogy.
 Like, think of it as the Chinese people having a strong and unbreakable spirit.
 That way, it's easier to understand. Also, make sure to keep it brief and to the point.
 Don't mention the task or instruction, just explain. Alright, that should work.
+
+## Feature Suggestions
+- Add demo passages for:
+  - Mixed scripts (e.g., Arabic + Latin, Cyrillic + Han).
+  - Emoji and special symbols.
+  - Right-to-left languages (Arabic, Hebrew).
+  - Code snippets and technical text.
+  - Extremely long sentences and paragraphs.

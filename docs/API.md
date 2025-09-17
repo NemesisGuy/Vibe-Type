@@ -1,5 +1,8 @@
 # VibeType Web API
 
+> **Recent Improvements (2025-09-17):**
+> - Kokoro TTS now supports robust polyglot (multi-language) synthesis, improved error handling, and optional phoneme logging. See FEATURES.md for details.
+
 This document provides details on the VibeType web API, which allows for programmatic interaction with the system's core functionalities.
 
 ## Kokoro TTS API
@@ -79,3 +82,12 @@ These endpoints provide access to the powerful, local Kokoro TTS engine.
             "error": "Missing required parameters: text, voice"
         }
         ```
+
+## Feature Suggestions
+
+- **Batch Synthesis Endpoint:** Allow submitting multiple texts for synthesis in a single API call.
+- **Phoneme Breakdown Endpoint:** Return the phoneme sequence and tokenization for a given text (for debugging or educational use).
+- **Language Detection Endpoint:** Expose the language detection/segmentation logic as an API for external tools.
+- **Streaming Synthesis API:** Support real-time streaming of audio chunks over HTTP/WebSocket.
+- **Voice Blending API:** Allow users to create and manage custom blended voices via the API.
+- **API for Pronunciation Dictionary:** Let users upload/download custom pronunciation overrides.

@@ -58,3 +58,26 @@ This document serves as a reference for subtle, hard-to-debug issues that have b
 - **Solution:** The COM library must be initialized with a GUI-compatible, apartment-threaded model (`pythoncom.COINIT_APARTMENTTHREADED`) *before* the `tkinter` main loop is started.
 
 - **Lesson:** Any library that interacts with low-level Windows APIs (especially COM) must be treated with extreme caution in a GUI application. Always check for thread-safe initialization options.
+
+---
+
+### 5. Intermittent 'No text selected' Bug in Clipboard/Selection
+
+- **Symptom:** Sometimes, when using the 'Read Selected Text' hotkey (Ctrl+R), the system would say "No text selected" even though text was highlighted.
+- **Root Cause:** The clipboard update after Ctrl+C was not always immediate, especially in some editors or with large selections. The system would read the clipboard too soon and get an empty or stale value.
+- **Solution:** The selection logic now polls the clipboard for up to 0.5 seconds, logging both the raw and sanitized selection. If the selection is empty or whitespace, it falls back to the previous clipboard content. This greatly reduces false negatives.
+- **Lesson:** Always allow for asynchronous clipboard updates and log both the raw and processed values for debugging.
+
+---
+
+### Debugging Tools
+
+- **Phoneme Logging:**
+  - You can now enable detailed phoneme logging for each TTS chunk (see kokoro_tts.py: SHOW_PHONEMES_IN_LOGS). This is invaluable for diagnosing G2P issues and understanding how text is being processed.
+
+---
+
+## Feature Suggestions
+
+- **Automated Bug Reporting:** Add a feature to export logs and recent errors directly from the GUI for easier troubleshooting.
+- **Log Export for TTS/Selection:** Allow users to save the raw/sanitized selection and phoneme logs for any session.
