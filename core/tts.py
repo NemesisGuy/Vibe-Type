@@ -487,10 +487,17 @@ def _speak_piper(text: str, config: dict, device_index: int = None):
     except Exception as e:
         logger.error(f"An unexpected error occurred with Piper TTS: {e}")
 
+def extract_quoted_text(text: str) -> str:
+    match = re.search(r'"([^"]+)"|\'([^\']+)\'', text)
+    if match:
+        return match.group(1) or match.group(2)
+    return text
+
 def speak_text(text: str, override_device_index: int = None):
     """Adds text to the TTS queue to be spoken."""
     if not text:
         return
+    # Pass the full selection to TTS (no quoted text extraction)
     tts_queue.put((text, override_device_index))
 
 def _tts_worker():

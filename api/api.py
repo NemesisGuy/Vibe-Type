@@ -1,4 +1,5 @@
 # api/api.py
+# This version includes the corrected SAMPLE_RATE import.
 
 from flask import Flask, request, jsonify, Response
 import numpy as np
@@ -8,7 +9,7 @@ import io
 # Assume KokoroTTS class is in the parent directory
 import sys
 sys.path.append('..')
-from kokoro_tts.kokoro_tts import KokoroTTS
+from kokoro_tts.kokoro_tts import KokoroTTS, SAMPLE_RATE
 
 app = Flask(__name__)
 
@@ -73,7 +74,7 @@ def synthesize_kokoro_speech():
 
         # Convert numpy array to WAV in memory
         wav_io = io.BytesIO()
-        sf.write(wav_io, audio_samples, kokoro_tts.SAMPLE_RATE, format='WAV')
+        sf.write(wav_io, audio_samples, SAMPLE_RATE, format='WAV')
         wav_io.seek(0)
 
         return Response(wav_io, mimetype='audio/wav')

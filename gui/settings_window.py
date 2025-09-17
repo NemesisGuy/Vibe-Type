@@ -20,6 +20,7 @@ from core.model_manager import delete_piper_model
 from core.transcript_saver import clear_transcript_history
 from core.analytics import load_analytics_data, reset_analytics_data
 from core.performance_monitor import get_performance_metrics
+from core.api_manager import start_api_server, stop_api_server, restart_api_server
 
 def create_settings_window(parent: tk.Tk, on_save_callback=None):
     config = load_config()
@@ -96,6 +97,11 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     theme_var = tk.StringVar(window, value=config.get('theme', 'System'))
     enable_text_injection_var = tk.BooleanVar(window, value=config.get('enable_text_injection'))
     
+    api_config = config.get('api', {})
+    api_enabled_var = tk.BooleanVar(window, value=api_config.get('enabled', False))
+    api_auto_start_var = tk.BooleanVar(window, value=api_config.get('auto_start', False))
+    api_port_var = tk.IntVar(window, value=api_config.get('port', 5000))
+
     ollama_config = config.get('ai_providers', {}).get('Ollama', {})
     ollama_enabled_var = tk.BooleanVar(window, value=ollama_config.get('enabled', False))
     ollama_url_var = tk.StringVar(window, value=ollama_config.get('api_url', ''))
@@ -174,7 +180,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     notebook.pack(expand=True, fill="both")
 
     # --- Tabs ---
-    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics"]}
+    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API"]}
     for name, tab_frame in tabs.items():
         notebook.add(tab_frame, text=name)
 
@@ -601,7 +607,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     kokoro_test_frame = ttk.LabelFrame(tabs["❤️ Kokoro TTS"], text="Test Kokoro Voice", padding="10")
     kokoro_test_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=5)
     kokoro_test_frame.columnconfigure(0, weight=1)
-    kokoro_test_text_var = tk.StringVar(window, value="The quick brown fox jumps over the lazy dog.")
+    kokoro_test_text_var = tk.StringVar(window, value="中国人民不信邪也不怕邪")
     ttk.Entry(kokoro_test_frame, textvariable=kokoro_test_text_var).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
     ttk.Button(kokoro_test_frame, text="Test Voice", command=run_kokoro_test).grid(row=0, column=1, padx=5, pady=5)
 
@@ -736,11 +742,37 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     download_button = ttk.Button(piper_models_frame, text="Download More Models...", command=open_piper_models_page)
     download_button.grid(row=1, column=1, sticky="e", padx=5, pady=5)
 
+    # --- API Tab ---
+    api_server_frame = ttk.LabelFrame(tabs["🌐 API"], text="API Server Settings", padding="10")
+    api_server_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
+    api_server_frame.columnconfigure(1, weight=1)
+
+    ttk.Checkbutton(api_server_frame, text="Enable API Server", variable=api_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=5)
+    ttk.Checkbutton(api_server_frame, text="Start Server Automatically on Startup", variable=api_auto_start_var).grid(row=1, column=0, columnspan=2, sticky="w", padx=5)
+
+    ttk.Label(api_server_frame, text="Server Port:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+    ttk.Entry(api_server_frame, textvariable=api_port_var, width=10).grid(row=2, column=1, sticky="w", padx=5)
+
+    api_controls_frame = ttk.LabelFrame(tabs["🌐 API"], text="Server Controls", padding="10")
+    api_controls_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
+    api_controls_frame.columnconfigure(0, weight=1)
+    api_controls_frame.columnconfigure(1, weight=1)
+    api_controls_frame.columnconfigure(2, weight=1)
+
+    ttk.Button(api_controls_frame, text="▶️ Start Server", command=start_api_server).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+    ttk.Button(api_controls_frame, text="⏹️ Stop Server", command=stop_api_server).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+    ttk.Button(api_controls_frame, text="🔄 Restart Server", command=restart_api_server).grid(row=0, column=2, sticky="ew", padx=5, pady=5)
+
     # --- Save and Cancel Buttons ---
     def on_save():
         config['theme'] = theme_var.get()
         config['enable_text_injection'] = enable_text_injection_var.get()
         
+        api_config_save = config.setdefault('api', {})
+        api_config_save['enabled'] = api_enabled_var.get()
+        api_config_save['auto_start'] = api_auto_start_var.get()
+        api_config_save['port'] = api_port_var.get()
+
         ollama_config_save = config.setdefault('ai_providers', {}).setdefault('Ollama', {})
         ollama_config_save['enabled'] = ollama_enabled_var.get()
         ollama_config_save['api_url'] = ollama_url_var.get()

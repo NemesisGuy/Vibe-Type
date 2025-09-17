@@ -33,6 +33,28 @@ def _strip_markdown_for_speech(text: str) -> str:
     text = re.sub(r'>\s', '', text)
     return text
 
+def _strip_logs_for_speech(text: str) -> str:
+    """Remove log/diagnostic lines and token dumps so TTS doesn't read them."""
+    if not text:
+        return text
+    lines = text.splitlines()
+    keep: list[str] = []
+    log_prefix = re.compile(r'^\s*(INFO|DEBUG|WARNING|ERROR|TRACEBACK|EXCEPTION|Status update:|Copied to clipboard:)', re.IGNORECASE)
+    for line in lines:
+        if log_prefix.match(line):
+            continue
+        if 'kokoro_tts.' in line or 'G2P output for text' in line or 'MToken(' in line:
+            continue
+        keep.append(line)
+    cleaned = '\n'.join(keep)
+    # Remove inline token dumps like MToken(...) and parentheses blocks that look like dumps
+    cleaned = re.sub(r'MToken\([^)]*\)', '', cleaned)
+    cleaned = re.sub(r'\(lang: [^)]+\)', '', cleaned)
+    # Collapse repeated whitespace
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
 def _update_status(status: str):
     print(f"Status update: {status}")
     if status_callback:
@@ -97,35 +119,47 @@ def _processing_task(is_ai_task: bool, mode_override: str = None):
 
 def _read_smart_task():
     """Saves clipboard, copies selected text, speaks it. If no text is selected, it speaks the original clipboard content."""
+    import time
     original_clipboard = core.clipboard_manager.get_clipboard_content()
     try:
         core.clipboard_manager.copy_to_clipboard('') # Clear clipboard to ensure we get the new selection
         pyautogui.hotkey('ctrl', 'c')
-        time.sleep(0.1) # Wait for clipboard to update
-        selected_text = core.clipboard_manager.get_clipboard_content()
-
+        # Wait for clipboard to update, up to 0.5s
+        selected_text = None
+        for _ in range(10):
+            time.sleep(0.05)
+            selected_text = core.clipboard_manager.get_clipboard_content()
+            if selected_text and selected_text != original_clipboard:
+                break
+        # Log raw clipboard content
+        print(f"[TTS] Raw selected_text: '{selected_text}'")
         text_to_speak = None
         source = ""
-        if selected_text:
+        if selected_text and selected_text.strip():
             text_to_speak = selected_text
             source = "selected text"
-        elif original_clipboard:
+        elif original_clipboard and original_clipboard.strip():
             text_to_speak = original_clipboard
             source = "clipboard"
-
+        # Sanitize selection before speaking
         if text_to_speak:
             config = load_config()
             active_tts_provider = config.get('active_tts_provider', 'Unknown')
             increment_usage("tts_engine_usage", active_tts_provider)
-            text_for_speech = _strip_markdown_for_speech(text_to_speak)
-            print(f"Reading from {source}: '{text_for_speech[:50]}...'")
-            _update_status("Speaking")
-            core.tts.speak_text(text_for_speech)
+            sanitized = _strip_logs_for_speech(text_to_speak)
+            sanitized = _strip_markdown_for_speech(sanitized)
+            print(f"[TTS] Sanitized text: '{sanitized}'")
+            if not sanitized.strip():
+                core.tts.speak_text("No text selected.")
+                print("[TTS] No text selected after sanitization.")
+            else:
+                print(f"Reading from {source}: '{sanitized[:50]}...'")
+                _update_status("Speaking")
+                core.tts.speak_text(sanitized)
         else:
-            core.tts.speak_text("No text selected and clipboard is empty.")
-        
+            core.tts.speak_text("No text selected.")
+            print("[TTS] No text selected or clipboard is empty.")
         time.sleep(1) # Give a moment for speech to start
-
     except Exception as e:
         print(f"ERROR in _read_smart_task: {e}")
         core.tts.speak_text("Error reading text.")
