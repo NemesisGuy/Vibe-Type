@@ -83,11 +83,43 @@ These endpoints provide access to the powerful, local Kokoro TTS engine.
         }
         ```
 
-## Feature Suggestions
+## Implemented Endpoints
 
-- **Batch Synthesis Endpoint:** Allow submitting multiple texts for synthesis in a single API call.
+The following endpoints are currently available:
+
+### Get Supported Languages
+- **Endpoint:** `/api/tts/kokoro/languages`
+- **Method:** `GET`
+- **Description:** Returns a JSON array of all supported languages, including "Auto-Detect".
+
+### Get Available Voices
+- **Endpoint:** `/api/tts/kokoro/voices`
+- **Method:** `GET`
+- **Description:** Returns a JSON array of available voices. Can be filtered by language.
+- **Query Parameters:**
+    - `language` (optional): The name of the language to filter by (e.g., "English (US)", "Japanese").
+
+### Synthesize Speech
+- **Endpoint:** `/api/tts/kokoro/synthesize`
+- **Method:** `POST`
+- **Description:** Synthesizes speech from the provided text and returns the audio as a WAV file.
+- **Request Body (JSON):**
+    - `text` (required): The text to be synthesized.
+    - `voice` (required): The name of the voice to use.
+    - `language` (optional): The language of the text. Defaults to "Auto-Detect".
+    - `speed` (optional): The speech rate. Defaults to 1.0.
+
+## Planned/Experimental Endpoints
+
+The following endpoints are planned or experimental and may not be available in your current build:
+
+- **Batch Synthesis Endpoint:** Submit multiple texts for synthesis in a single API call.
 - **Phoneme Breakdown Endpoint:** Return the phoneme sequence and tokenization for a given text (for debugging or educational use).
 - **Language Detection Endpoint:** Expose the language detection/segmentation logic as an API for external tools.
 - **Streaming Synthesis API:** Support real-time streaming of audio chunks over HTTP/WebSocket.
 - **Voice Blending API:** Allow users to create and manage custom blended voices via the API.
 - **API for Pronunciation Dictionary:** Let users upload/download custom pronunciation overrides.
+
+## Debugging and Logging
+
+- **Phoneme Logging:** You can enable detailed phoneme logging for each chunk by setting `SHOW_PHONEMES_IN_LOGS` in `kokoro_tts.py`. This is useful for debugging and understanding how text is processed internally.

@@ -3,6 +3,7 @@
 import multiprocessing
 import time
 import os
+import requests
 from core.config_manager import load_config
 
 # --- Globals for managing the server process ---
@@ -60,3 +61,31 @@ def run_flask_app(port):
         app.run(host='0.0.0.0', port=port)
     except Exception as e:
         print(f"Failed to run Flask app: {e}")
+
+def is_api_running():
+    """Checks if the API server is running and responsive."""
+    global api_process
+    config = load_config()
+    api_config = config.get('api', {})
+    port = api_config.get('port', 5000)
+    # Check process (if managed by GUI)
+    if api_process and api_process.is_alive():
+        # Try to ping the API endpoint
+        try:
+            resp = requests.get(f"http://localhost:{port}/api/v1/tts/kokoro/languages", timeout=1)
+            if resp.status_code == 200:
+                return "running"
+            else:
+                return "error"
+        except Exception:
+            return "error"
+    else:
+        # Try to ping anyway (in case started externally)
+        try:
+            resp = requests.get(f"http://localhost:{port}/api/v1/tts/kokoro/languages", timeout=1)
+            if resp.status_code == 200:
+                return "running"
+            else:
+                return "stopped"
+        except Exception:
+            return "stopped"

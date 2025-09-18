@@ -73,6 +73,12 @@ Choose the voice you want to hear for audio feedback. All local models should be
         *   **Seamless Streaming:** Supports chunked streaming for a highly responsive experience.
         *   **Voice Blending:** Create unique, custom voices by mixing the characteristics of existing ones.
         *   **Wide Language Support:** Includes high-quality voices for English, Japanese, Spanish, French, Mandarin Chinese, and more.
+        *   **Examples:**
+            *   English: "Hello, how are you?" (Voice: Alex)
+            *   Japanese: "こんにちは、お元気ですか？" (Voice: Sakura)
+            *   Spanish: "Hola, ¿cómo estás?" (Voice: Carlos)
+            *   French: "Bonjour, comment ça va?" (Voice: Claire)
+            *   Mandarin Chinese: "你好，你怎么样？" (Voice: Ming)
 
 *   **Piper TTS (Local):**
     *   **Type:** Custom Local
@@ -109,16 +115,16 @@ When a hotkey is used, the associated prompt is passed to the Ollama LLM, ensuri
   - Log lines and token dumps are stripped before TTS, so logs are never spoken.
   - New: Optional phoneme logging for each chunk (see kokoro_tts.py: SHOW_PHONEMES_IN_LOGS).
 
-## Feature Suggestions
+## Robust Error Handling and Fallback
 
-- **Real-time language switching in the UI:** Show detected language and allow user override per segment.
-- **User-configurable phoneme logging level:** Toggle phoneme/token logging from the GUI.
-- **Visual feedback for language detection:** Highlight or color-code detected languages in the UI.
-- **Per-language voice selection:** Let users assign a different voice for each language.
-- **TTS output waveform preview:** Show a live waveform or spectrogram as speech is generated.
-- **Automatic fallback to another TTS engine:** If one engine fails, try the next available provider.
-- **User-editable pronunciation dictionary:** Let users override G2P for specific words.
-- **Cross-platform clipboard/selection capture:** Improve selection logic for Linux/Mac.
-- **Browser extension integration:** Read web pages aloud directly from the browser.
-- **API endpoint for batch TTS jobs:** Submit multiple texts for synthesis in one call.
-- **GUI for viewing/exporting phoneme breakdowns:** Let users see and export the phoneme sequence for any passage.
+Kokoro TTS automatically detects available hardware and will use GPU acceleration if possible. If the GPU is unavailable or an error occurs, it will gracefully fall back to CPU execution, ensuring that speech synthesis always works. All errors are logged for debugging, and problematic text chunks are skipped rather than causing a crash.
+
+---
+
+## Voice Agent Integration (MCP Speak)
+
+- All agent and assistant features must use the MCP speak function for every response, ensuring accessibility and hands-free operation.
+- Example: After any code change, status update, or error, the agent should call the MCP speak tool to announce the result.
+- If the MCP or TTS is unavailable, log the failure and continue, but always attempt to speak first.
+
+---

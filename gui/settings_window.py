@@ -20,7 +20,7 @@ from core.model_manager import delete_piper_model
 from core.transcript_saver import clear_transcript_history
 from core.analytics import load_analytics_data, reset_analytics_data
 from core.performance_monitor import get_performance_metrics
-from core.api_manager import start_api_server, stop_api_server, restart_api_server
+from core.api_manager import start_api_server, stop_api_server, restart_api_server, is_api_running
 
 def create_settings_window(parent: tk.Tk, on_save_callback=None):
     config = load_config()
@@ -753,15 +753,46 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ttk.Label(api_server_frame, text="Server Port:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
     ttk.Entry(api_server_frame, textvariable=api_port_var, width=10).grid(row=2, column=1, sticky="w", padx=5)
 
+    # --- API Server Status Indicator ---
+    api_status_var = tk.StringVar()
+    api_status_label = ttk.Label(api_server_frame, textvariable=api_status_var, font=("Segoe UI", 10, "bold"))
+    api_status_label.grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+
+    def update_api_status():
+        status = is_api_running()
+        if status == "running":
+            api_status_var.set("API Server: Running")
+            api_status_label.configure(foreground="green")
+        elif status == "error":
+            api_status_var.set("API Server: Error")
+            api_status_label.configure(foreground="orange")
+        else:
+            api_status_var.set("API Server: Stopped")
+            api_status_label.configure(foreground="red")
+        # Poll every 10 seconds (was 3 seconds)
+        api_status_label.after(10000, update_api_status)
+
+    update_api_status()
+
     api_controls_frame = ttk.LabelFrame(tabs["🌐 API"], text="Server Controls", padding="10")
     api_controls_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
     api_controls_frame.columnconfigure(0, weight=1)
     api_controls_frame.columnconfigure(1, weight=1)
     api_controls_frame.columnconfigure(2, weight=1)
 
-    ttk.Button(api_controls_frame, text="▶️ Start Server", command=start_api_server).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
-    ttk.Button(api_controls_frame, text="⏹️ Stop Server", command=stop_api_server).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
-    ttk.Button(api_controls_frame, text="🔄 Restart Server", command=restart_api_server).grid(row=0, column=2, sticky="ew", padx=5, pady=5)
+    def start_and_update():
+        start_api_server()
+        update_api_status()
+    def stop_and_update():
+        stop_api_server()
+        update_api_status()
+    def restart_and_update():
+        restart_api_server()
+        update_api_status()
+
+    ttk.Button(api_controls_frame, text="▶️ Start Server", command=start_and_update).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+    ttk.Button(api_controls_frame, text="⏹️ Stop Server", command=stop_and_update).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+    ttk.Button(api_controls_frame, text="🔄 Restart Server", command=restart_and_update).grid(row=0, column=2, sticky="ew", padx=5, pady=5)
 
     # --- Save and Cancel Buttons ---
     def on_save():

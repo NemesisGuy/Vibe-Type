@@ -110,3 +110,21 @@ Core Features:
 - add comprehensive tests for each feature to prevent regressions. 
 - Always keep a log of attempted fixes and know bugs and solutions.
 - Maintain readme.md and other documentation files in the project.
+- ALWAYS use the speak function from the MCP service in each response. Every time you respond, use it to say anything you like, even if just a greeting or status update. This ensures all agent interactions are accessible via voice.
+
+---
+
+## 🗣️ Voice Agent Integration (MCP Speak)
+
+- All AI agent responses must use the MCP `speak` function to provide voice feedback, in addition to any text output.
+- The workflow for every agent response is:
+    1. Use the MCP speak tool to say a polite greeting or announce the planned action (e.g., "Let me check that for you.").
+    2. Perform the requested work or code change.
+    3. Use the MCP speak tool again to announce the result, status, or any error (e.g., "The update is complete." or "There was an error, please check the logs.").
+    4. Agents may speak additional messages at any point if desired, but must always speak at the beginning and end of each response.
+- Agents must always use a valid voice code.
+- To get a list of valid voices, use the MCP `list_voices` tool, optionally filtered by language. Example: `list_voices(language="English (US)")`.
+- The MCP speak tool is required for every agent reply, ensuring accessibility and hands-free operation.
+- If the MCP or TTS is unavailable, log the failure and continue, but always attempt to speak first.
+
+---

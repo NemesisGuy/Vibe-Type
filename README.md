@@ -44,3 +44,13 @@ Kokoro TTS relies on a few external dependencies for its powerful multi-language
     ```
 
 *   **Other Languages (French, Spanish, etc.):** Many other languages are supported via `espeak-ng`. If you have issues with these languages, ensure you have `espeak-ng` installed and accessible in your system's PATH.
+
+---
+
+## Voice Agent Integration (MCP Speak)
+
+- All agent responses must use the MCP speak function for voice feedback, in addition to any text output.
+- The MCP speak tool is required for every agent reply, ensuring accessibility and hands-free operation.
+- If the MCP or TTS is unavailable, log the failure and continue, but always attempt to speak first.
+
+---
