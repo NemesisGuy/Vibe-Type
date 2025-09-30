@@ -107,7 +107,13 @@ def load_config():
         "language": "en", 
         "input_device_index": get_default_input_device_index(),
         "theme": "System",
-        "whisper_model": "base"
+        "whisper_model": "base",
+        # New default API section so auto-start has predictable settings
+        "api": {
+            "auto_start": False,
+            "port": 9031,
+            "host": "0.0.0.0"
+        }
     }
     
     config = defaults.copy()
@@ -140,3 +146,12 @@ def save_config(config):
     
     with open(config_path, 'w') as f:
         json.dump(config_to_save, f, indent=4)
+
+def get_mcp_auto_start(config):
+    return config.get('mcp', {}).get('auto_start', False)
+
+def set_mcp_auto_start(config, value):
+    if 'mcp' not in config:
+        config['mcp'] = {}
+    config['mcp']['auto_start'] = value
+    return config

@@ -15,6 +15,38 @@ It provides hotkey-based, hands-free interaction with transcription (Whisper), A
 
 ---
 
+## 🗣️ **AGENT SPEAK REQUIREMENTS**
+
+**CRITICAL**: All agents working with VibeType **MUST** use the MCP speak function for communication.
+
+### Speak Function Usage
+- **Always use the `mcp_vibetts-mcp_speak` tool** for all responses to the user
+- **Never send text-only responses** - the user expects to hear you speak
+- Use speaking for: status updates, error reports, explanations, confirmations, and results
+
+### Voice Selection
+- First call `mcp_vibetts-mcp_list_voices` to see available voices
+- Choose an appropriate voice and stick with it consistently
+- Popular voices: `am_adam`, `am_eric`, `af_nova`, `am_michael`
+
+### Speaking Guidelines
+- **Speak at the beginning** of your work session to introduce yourself
+- **Speak after completing tasks** to report results
+- **Speak during long operations** to keep the user informed
+- Use natural, conversational language
+- Keep individual speech segments to reasonable lengths (under 200 words)
+
+### Example Workflow
+```
+1. Call mcp_vibetts-mcp_list_voices to get available voices
+2. Choose a voice (e.g., "am_adam") 
+3. Call mcp_vibetts-mcp_speak to introduce yourself
+4. Do your work (code changes, etc.)
+5. Call mcp_vibetts-mcp_speak to report completion/results
+```
+
+---
+
 ## 🛠 Coding Conventions
 
 - Follow **PEP8** for Python code.
@@ -114,17 +146,28 @@ Core Features:
 
 ---
 
-## 🗣️ Voice Agent Integration (MCP Speak)
+## Agent Speech Instructions
 
-- All AI agent responses must use the MCP `speak` function to provide voice feedback, in addition to any text output.
-- The workflow for every agent response is:
-    1. Use the MCP speak tool to say a polite greeting or announce the planned action (e.g., "Let me check that for you.").
-    2. Perform the requested work or code change.
-    3. Use the MCP speak tool again to announce the result, status, or any error (e.g., "The update is complete." or "There was an error, please check the logs.").
-    4. Agents may speak additional messages at any point if desired, but must always speak at the beginning and end of each response.
-- Agents must always use a valid voice code.
-- To get a list of valid voices, use the MCP `list_voices` tool, optionally filtered by language. Example: `list_voices(language="English (US)")`.
-- The MCP speak tool is required for every agent reply, ensuring accessibility and hands-free operation.
-- If the MCP or TTS is unavailable, log the failure and continue, but always attempt to speak first.
+- Agents should use the speak tool at the beginning and end of their work, and may speak more if desired.
+- Agents must use a valid voice. To get available voices, call the list_voices tool before speaking.
+- If a voice is not specified, agents should select a default or prompt the user.
+- This ensures all agent output can be heard via TTS.
+- When using the speak tool, use it to say anything you like, even if just a greeting or status update. Every response should be spoken for accessibility.
 
----
+### Voice Selection & Defaults
+- Preferred reliable voices for English (US): `am_adam`, `am_eric`. Test other voices with short lines first.
+- Agents should remember the last successful voice within a session and reuse it unless asked to change.
+
+### Reducing Permission Prompts
+- Use `speak_batch(texts=[...], voice=..., language=..., speed=...)` to speak multiple short lines in a single tool call.
+- Bundle: opening line + status + closing line in one batch to minimize approvals.
+- Keep individual lines brief (under ~8 seconds) to reduce HTTP timeouts.
+
+### Stability & Timeouts
+- The TTS API returns quickly with `{ status: "in_progress" }`; agents should not wait for audio to finish.
+- On HTTP timeouts, treat the request as accepted and continue. The server likely started playback.
+- If the API responds `429` (queue busy), wait a few seconds and retry with shorter lines or fewer items in a batch.
+
+### Readiness & Health
+- Agents may probe readiness via `GET /api/v1/tts/kokoro/languages` (200 = ready).
+- Health endpoint: `GET /status` returns queue length and worker settings.

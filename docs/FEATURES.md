@@ -127,4 +127,87 @@ Kokoro TTS automatically detects available hardware and will use GPU acceleratio
 - Example: After any code change, status update, or error, the agent should call the MCP speak tool to announce the result.
 - If the MCP or TTS is unavailable, log the failure and continue, but always attempt to speak first.
 
----
+## MCP Server Integration
+
+- VibeType now manages the MCP server as a subprocess.
+- Features:
+  - Auto-start MCP server on launch (configurable in settings)
+  - Manual Start/Stop/Restart controls in the GUI
+  - Status indicator for MCP server (running/stopped)
+  - MCP logs are viewable in the VibeType UI
+  - Graceful shutdown of MCP server on VibeType exit
+- This removes the need to manually launch MCP in a separate terminal.
+
+## AI Integration with Thinking Fillers 🧠💬
+
+**NEW**: VibeType now includes an intelligent thinking fillers system that makes AI interactions feel more natural and engaging.
+
+### What are Thinking Fillers?
+When you ask Ollama a question, there's usually a delay while the AI processes your request. Instead of awkward silence, VibeType can now speak natural filler phrases to indicate that it's working on your request.
+
+### How It Works
+- **Automatic Detection**: When an AI request is made, the system automatically starts speaking filler phrases
+- **Smart Timing**: Fillers are spoken at natural intervals with randomized timing
+- **Variety**: Over 40 different phrases to keep interactions fresh
+- **Contextual**: Different types of phrases for different situations
+
+### Types of Filler Phrases
+
+**Thinking Indicators:**
+- "Let me think about that for a moment..."
+- "Processing your request..."
+- "Analyzing your input..."
+- "Working on that now..."
+
+**Short Pauses:**
+- "Just a moment..."
+- "Give me a sec..."
+- "Almost there..."
+- "Nearly done..."
+
+**Professional Responses:**
+- "Formulating a response..."
+- "Gathering my thoughts..."
+- "Reviewing the details..."
+
+**Technical Context:**
+- "Querying the language model..."
+- "Running inference..."
+- "Processing tokens..."
+
+### Configuration Options
+
+You can customize the thinking fillers behavior in your `config.json`:
+
+```json
+{
+  "ai_providers": {
+    "Ollama": {
+      "use_thinking_fillers": true,
+      "filler_initial_delay": 0.5,
+      "filler_interval_min": 2.5,
+      "filler_interval_max": 5.0,
+      "speak_response": true
+    }
+  }
+}
+```
+
+- `use_thinking_fillers`: Enable/disable the feature
+- `filler_initial_delay`: Seconds to wait before first filler phrase
+- `filler_interval_min`: Minimum seconds between filler phrases  
+- `filler_interval_max`: Maximum seconds between filler phrases
+
+### Benefits
+- **Natural Interaction**: No more awkward silences during AI processing
+- **User Feedback**: Clear indication that the system is working
+- **Engagement**: Keeps the conversation flowing naturally
+- **Customizable**: Adjust timing to match your preferences
+
+### Demo and Testing
+Run the demo script to see how it works:
+```bash
+python dev/thinking_fillers_demo.py
+```
+
+This feature works seamlessly with all VibeType AI modes: Chat, Explain, Summarize, and Correct.

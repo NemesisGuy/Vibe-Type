@@ -4,5 +4,15 @@
     "piper_tts_enabled": true,
     "ollama_api_url": "http://localhost:11434",
     "api_key": "YOUR_API_KEY",
-    "language": "en"
+    "language": "en",
+    "ai_providers": {
+        "Ollama": {
+            "enabled": true,
+            "use_thinking_fillers": false,
+            "filler_initial_delay": 0.5,
+            "filler_interval_min": 2.5,
+            "filler_interval_max": 5.0,
+            "speak_response": true
+        }
+    }
 }

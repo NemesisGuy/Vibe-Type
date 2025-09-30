@@ -10,6 +10,7 @@ This document is for brainstorming, technical planning, and capturing ideas for 
 - **Strengths:**
   - Good CUDA performance for its generation
   - Can run most ONNX and PyTorch models with proper optimization
+  - 11GB VRAM allows decent model sizes
 - **Limits:**
   - No FP16/Tensor core acceleration (unlike RTX cards)
   - VRAM may limit very large models or batch sizes
@@ -17,65 +18,164 @@ This document is for brainstorming, technical planning, and capturing ideas for 
 
 ---
 
+## Recently Implemented ✅
+
+### Thinking Fillers System (September 2025)
+- **Feature:** Natural filler phrases during AI processing
+- **Implementation:** 40+ contextual phrases spoken while Ollama thinks
+- **Configuration:** Customizable timing intervals and enable/disable toggle
+- **Benefits:** Eliminates awkward silence, provides user feedback, keeps conversations natural
+- **Files:** `core/thinking_fillers.py`, integrated into `core/ai.py` and `core/app_state.py`
+
+### MCP Server Integration
+- **Feature:** VibeType now manages MCP server as subprocess
+- **Implementation:** Auto-start, manual controls, status indicators, log viewing
+- **Benefits:** No more manual terminal management for MCP server
+
+---
+
 ## Feature Ideas
 
-### Short-Term
-- Real-time TTS streaming with low latency
-- Voice blending UI for custom voices
-- Per-language voice selection
-- User-editable pronunciation dictionary
-- Visual feedback for language detection
-- Hotkey to benchmark TTS speed (CPU vs GPU)
+### Short-Term (1080 Ti Optimized)
+- **Real-time TTS streaming** with low latency chunking
+- **Voice blending UI** for custom voice creation (GPU-accelerated mixing)
+- **Per-language voice selection** with automatic switching
+- **User-editable pronunciation dictionary** for technical terms
+- **Visual feedback** for language detection and voice switching
+- **GPU benchmarking tool** to compare CPU vs CUDA performance
+- **Model quantization** to fit more voices in 11GB VRAM
+- **Batch TTS processing** for long documents (utilize full GPU memory)
 
-### Long-Term
-- Web-based remote control or API
-- Multi-user voice chat with TTS
-- Automatic model quantization for low VRAM
-- Integration with browser extensions
-- AI-powered voice style transfer
+### Medium-Term
+- **Web-based remote control** API for mobile/tablet control
+- **Multi-user voice chat** with individual TTS voices
+- **Browser extension integration** for reading web pages
+- **Custom hotkey profiles** for different applications
+- **Voice activity detection** to improve dictation accuracy
+- **Automatic model switching** based on content type
+
+### Long-Term & Experimental
+- **AI-powered voice style transfer** (within 1080 Ti constraints)
+- **Real-time voice conversion** for privacy
+- **Distributed processing** across multiple machines
+- **Custom model training** pipeline for personalized voices
+- **Advanced phoneme editing** for perfect pronunciation
 
 ---
 
 ## Technical Experiments & Benchmarks
-- Compare TTS speed and quality: CPU vs 1080 Ti (CUDA)
-- Test model quantization (e.g., ONNX 8-bit/16-bit)
-- Batch synthesis for long-form text
-- Measure VRAM usage for different models
-- Try streaming synthesis with chunked audio
-- Profile memory and latency bottlenecks
+
+### Performance Testing
+- Compare TTS speed and quality: CPU vs 1080 Ti CUDA
+- Test model quantization (ONNX 8-bit/16-bit) impact on quality
+- Measure VRAM usage patterns for different model sizes
+- Profile memory allocation and deallocation efficiency
+- Test concurrent model loading (multiple languages)
+
+### Optimization Research
+- **ONNX Runtime GPU acceleration** for all TTS models
+- **Mixed precision inference** where supported
+- **Memory-mapped model loading** to reduce startup time
+- **Async model switching** to eliminate loading delays
+- **GPU memory pooling** to prevent fragmentation
+
+### Hardware Utilization
+- **CUDA stream optimization** for parallel processing
+- **Memory bandwidth testing** with different batch sizes
+- **Thermal monitoring** during extended usage
+- **Power consumption analysis** for different workloads
 
 ---
 
-## Optimization Opportunities
-- Use ONNX Runtime with CUDA for TTS
-- Quantize models to fit larger voices in VRAM
-- Implement smart batching for multi-sentence input
-- Cache frequent voices or phoneme sequences
-- Fallback to CPU if GPU is busy or out of memory
+## 1080 Ti Specific Optimizations
+
+### Memory Management
+- **Smart model caching:** Keep frequently used voices in VRAM
+- **Progressive loading:** Stream large models as needed
+- **Compression techniques:** Use quantized models by default
+- **Memory defragmentation:** Periodic cleanup of GPU memory
+
+### Performance Tuning  
+- **CUDA kernel optimization** for older architecture
+- **Batch size tuning** to maximize throughput without OOM
+- **Pipeline parallelism** between CPU preprocessing and GPU inference
+- **Asynchronous processing** to hide model loading latency
+
+### Quality vs Speed Trade-offs
+- **Fast mode:** Lower quality, higher speed for real-time use
+- **Quality mode:** Full precision for final output
+- **Adaptive quality:** Dynamic adjustment based on content length
+- **User preferences:** Let users choose their preferred balance
 
 ---
 
-## Open Questions & Research Links
-- What is the largest TTS model that fits in 11GB VRAM?
-- Are there open-source tools for easy ONNX quantization?
-- Can we use mixed precision on 1080 Ti for speedup?
-- How to best handle multi-language streaming on limited VRAM?
-- [ONNX Runtime GPU docs](https://onnxruntime.ai/docs/build/eps.html#cuda)
-- [NVIDIA 1080 Ti specs](https://www.techpowerup.com/gpu-specs/geforce-gtx-1080-ti.c2996)
+## Integration Ideas
+
+### MCP Expansions
+- **YouTube MCP:** Extract and read video transcripts
+- **Web scraping MCP:** Read articles and summaries aloud  
+- **Weather MCP:** Voice weather reports with personality
+- **Calendar MCP:** Spoken schedule and reminders
+- **System monitoring MCP:** Voice system status updates
+- **File management MCP:** Voice-controlled file operations
+
+### Third-Party Integration
+- **OBS Studio plugin:** Voice announcements for streaming
+- **Discord bot:** TTS for text channels
+- **VSCode extension:** Code reading and documentation
+- **Browser extension:** Read-aloud for any webpage
+- **Home automation:** Voice feedback for smart home actions
 
 ---
 
-## Next Steps / Action Items
-- [ ] Run a TTS speed benchmark on 1080 Ti vs CPU
-- [ ] Try quantizing a Kokoro or Piper model
-- [ ] Prototype a real-time streaming TTS endpoint
-- [ ] Add your own ideas and notes below!
+## Research Areas
+
+### AI & Machine Learning
+- **Lightweight voice cloning** that runs on 1080 Ti
+- **Real-time emotion detection** for expressive TTS
+- **Content-aware voice selection** (technical vs casual)
+- **Pronunciation learning** from user corrections
+
+### Audio Processing
+- **Advanced noise reduction** for better dictation
+- **Echo cancellation** for hands-free operation
+- **Audio enhancement** for clearer synthetic speech
+- **Spatial audio effects** for immersive experience
+
+### User Experience
+- **Accessibility features** for visually impaired users
+- **Gesture control** integration
+- **Eye tracking** for hands-free text selection
+- **Voice emotion analysis** for better interaction
 
 ---
 
-## Your Brainstorming Space
+## Development Priorities
 
-(Add your thoughts, wild ideas, and questions here)
+### High Priority
+1. Optimize existing TTS models for 1080 Ti
+2. Implement model quantization pipeline
+3. Add voice blending interface
+4. Create comprehensive benchmarking suite
 
-- 
+### Medium Priority  
+1. Web API for remote control
+2. Browser extension development
+3. Advanced hotkey customization
+4. Multi-language optimization
 
+### Low Priority (Future)
+1. Custom model training pipeline
+2. Advanced AI features
+3. Hardware-specific optimizations for newer GPUs
+4. Cloud integration options
+
+---
+
+## Notes & Reminders
+
+- Always test new features on 1080 Ti before release
+- Maintain compatibility with CPU-only systems
+- Document performance characteristics for each feature
+- Keep user configuration simple but powerful
+- Prioritize local-first, privacy-focused design

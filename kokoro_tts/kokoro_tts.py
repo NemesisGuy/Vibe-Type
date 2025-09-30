@@ -63,16 +63,54 @@ class KokoroTTS:
             return None
 
     def _get_g2p_pipeline(self, lang_code: str):
-        if lang_code in self.g2p_cache: return self.g2p_cache[lang_code]
+        if lang_code in self.g2p_cache:
+            return self.g2p_cache[lang_code]
+
         logger.info(f"Initializing G2P for lang_code '{lang_code}'...")
         pipeline = None
-        if lang_code == 'j': pipeline = ja.JAG2P()
-        elif lang_code == 'a': pipeline = en.G2P()
-        elif lang_code == 'z': pipeline = zh.ZHG2P()
+
+        try:
+            # Use timeout to prevent hanging on G2P initialization
+            import signal
+            import threading
+
+            def timeout_handler(signum, frame):
+                raise TimeoutError(f"G2P initialization timeout for lang_code '{lang_code}'")
+
+            # Set up timeout for G2P initialization (5 seconds max)
+            if hasattr(signal, 'SIGALRM'):  # Unix systems
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(5)
+
+            try:
+                if lang_code == 'j':
+                    pipeline = ja.JAG2P()
+                elif lang_code == 'a':
+                    # English G2P is causing hangs - add extra protection
+                    logger.info("Attempting English G2P initialization with timeout protection...")
+                    pipeline = en.G2P()
+                elif lang_code == 'z':
+                    pipeline = zh.ZHG2P()
+                else:
+                    cfg = next((c for c in LANGUAGE_CONFIG.values() if c.get('lang_code') == lang_code and 'espeak_lang' in c), None)
+                    if cfg:
+                        pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
+            finally:
+                if hasattr(signal, 'SIGALRM'):  # Reset alarm
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+
+        except (TimeoutError, Exception) as e:
+            logger.error(f"G2P initialization failed for lang_code '{lang_code}': {e}")
+            # Return None to indicate failure - synthesis will be skipped
+            return None
+
+        if pipeline:
+            self.g2p_cache[lang_code] = pipeline
+            logger.info(f"G2P successfully initialized for lang_code '{lang_code}'")
         else:
-            cfg = next((c for c in LANGUAGE_CONFIG.values() if c.get('lang_code') == lang_code and 'espeak_lang' in c), None)
-            if cfg: pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
-        if pipeline: self.g2p_cache[lang_code] = pipeline
+            logger.warning(f"G2P initialization returned None for lang_code '{lang_code}'")
+
         return pipeline
 
     def download_models(self) -> None:
@@ -163,48 +201,103 @@ class KokoroTTS:
 
     def _synthesize_chunk(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> Optional[np.ndarray]:
         logger.info(f"_synthesize_chunk called with text: '{text}', language: '{language_name}'")
+
+        # Preprocess and sanitize text to prevent G2P failures
+        text = text.strip()
+        if not text:
+            logger.info("Empty text after stripping, skipping chunk")
+            return None
+
+        # Remove problematic characters that can cause G2P issues
+        text = re.sub(r'[""''‚„«»‹›]', '"', text)  # Normalize quotes
+        text = re.sub(r'[–—−]', '-', text)  # Normalize dashes
+        text = re.sub(r'[…]', '...', text)  # Normalize ellipsis
+        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+
         # Allow Latin (basic+extended), digits, Han, Kana, Devanagari, Cyrillic
         if not re.search(r'[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF\u4e00-\u9fff\u3040-\u30ff\u0900-\u097F\u0400-\u04FF]', text):
             logger.info(f"Skipping punctuation/symbol-only chunk: '{text}'")
             return None
+
         lang_code = LANGUAGE_CONFIG[language_name].get("lang_code")
         if not lang_code: return None
+
         g2p_engine = self._get_g2p_pipeline(lang_code)
         if not g2p_engine:
             logger.warning(f"No G2P engine for language '{language_name}'. Skipping.")
             return None
+
+        # Enhanced G2P processing with better error handling
         try:
             phonemes = g2p_engine(text)
         except Exception as e:
             logger.warning(f"G2P failed for text: '{text}' (lang: {language_name}): {e}")
+            # Try fallback: split into smaller pieces and retry
+            if len(text) > 50:
+                logger.info(f"Attempting to split long text for G2P retry: '{text[:30]}...'")
+                # Split by sentences or commas
+                parts = re.split(r'[.!?;,]\s*', text)
+                if len(parts) > 1:
+                    for part in parts:
+                        part = part.strip()
+                        if part and len(part) > 3:  # Skip very short parts
+                            try:
+                                chunk_audio = self._synthesize_chunk(part, language_name, voice_or_embedding, speed)
+                                if chunk_audio is not None:
+                                    return chunk_audio  # Return first successful synthesis
+                            except Exception:
+                                continue
+            logger.warning(f"All G2P attempts failed for text: '{text}' (lang: {language_name})")
             return None
+
         if SHOW_PHONEMES_IN_LOGS:
-            # Log phoneme string and token details
+            # Log phoneme string summary only (no individual word breakdown)
             if isinstance(phonemes, tuple) and len(phonemes) == 2 and isinstance(phonemes[1], list):
                 logger.info(f"Phoneme string: {phonemes[0]}")
-                for t in phonemes[1]:
-                    logger.info(f"Token: '{getattr(t, 'text', '')}' | Phonemes: '{getattr(t, 'phonemes', '')}' | Whitespace: '{getattr(t, 'whitespace', '')}'")
+                # Removed verbose word-by-word token logging to reduce log noise
             else:
                 logger.info(f"Phoneme string: {phonemes}")
+
         if logger.isEnabledFor(logging.DEBUG):
             preview = (text[:60] + '…') if len(text) > 60 else text
             if isinstance(phonemes, tuple) and len(phonemes) == 2 and isinstance(phonemes[1], list):
                 logger.debug(f"G2P ok ({language_name}): '{preview}' tokens={len(phonemes[1])}")
             else:
                 logger.debug(f"G2P ok ({language_name}): '{preview}'")
+
         # --- Robustly handle None phonemes ---
         if phonemes is None:
             logger.warning(f"G2P returned None for text: '{text}' (lang: {language_name})")
             return None
+
         final_phonemes = phonemes[0] if isinstance(phonemes, tuple) else phonemes
+
         if isinstance(final_phonemes, list):
             filtered = [t for t in final_phonemes if getattr(t, 'phonemes', None) is not None]
             if not filtered:
                 logger.warning(f"All tokens have None phonemes for text: '{text}' (lang: {language_name})")
                 return None
-            final_phonemes = ''.join(getattr(t, 'phonemes', '') + getattr(t, 'whitespace', '') for t in filtered)
-        if not final_phonemes or final_phonemes.isspace(): return None
-        return self.kokoro.create(final_phonemes, voice=voice_or_embedding, speed=speed, is_phonemes=True)[0]
+            # Fix NoneType concatenation error by ensuring all values are properly converted to strings and handling None cases
+            final_phonemes = ''.join(
+                (str(getattr(t, 'phonemes', '') or '')) + (str(getattr(t, 'whitespace', '') or ''))
+                for t in filtered
+                if getattr(t, 'phonemes', None) is not None
+            )
+
+        if not final_phonemes or final_phonemes.isspace():
+            logger.warning(f"Final phonemes empty or whitespace-only for text: '{text}' (lang: {language_name})")
+            return None
+
+        # Additional safety check before synthesis
+        if not isinstance(final_phonemes, str):
+            logger.warning(f"Final phonemes not a string for text: '{text}' (lang: {language_name}): {type(final_phonemes)}")
+            return None
+
+        try:
+            return self.kokoro.create(final_phonemes, voice=voice_or_embedding, speed=speed, is_phonemes=True)[0]
+        except Exception as e:
+            logger.error(f"Kokoro synthesis failed for text: '{text}' (lang: {language_name}): {e}")
+            return None
 
     # --- STREAMING ---
     def stream(self, text: Union[str, List[str]], language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
@@ -212,31 +305,78 @@ class KokoroTTS:
         clean_text = self._preprocess_text(text)
         audio_queue = Queue(maxsize=20)
 
+        # Add memory and threading safety for polyglot processing
+        max_chunks_per_batch = 10  # Limit concurrent processing to prevent memory issues
+        processing_lock = threading.Lock()
+
         def producer():
-            segments = self._segment_by_language(clean_text) if language_name == "Auto-Detect" else [(language_name, clean_text)]
-            for lang, seg_text in segments:
-                if interrupt_event and interrupt_event.is_set(): break
-                for chunk in self._generate_linguistic_chunks(seg_text):
+            try:
+                segments = self._segment_by_language(clean_text) if language_name == "Auto-Detect" else [(language_name, clean_text)]
+
+                # Process segments in smaller batches to prevent memory overload
+                chunk_count = 0
+                for lang, seg_text in segments:
                     if interrupt_event and interrupt_event.is_set(): break
-                    logger.info(f"Synthesizing chunk ({lang}): '{chunk}'")
-                    audio_chunk = self._synthesize_chunk(chunk, lang, voice_or_embedding, speed)
-                    if audio_chunk is not None and audio_chunk.size > 0:
-                        audio_queue.put(audio_chunk)
-            audio_queue.put(None)
+
+                    for chunk in self._generate_linguistic_chunks(seg_text):
+                        if interrupt_event and interrupt_event.is_set(): break
+
+                        # Limit concurrent processing to prevent memory issues
+                        chunk_count += 1
+                        if chunk_count > max_chunks_per_batch:
+                            # Brief pause to prevent memory overload
+                            import time
+                            time.sleep(0.1)
+                            chunk_count = 0
+
+                        logger.info(f"Synthesizing chunk ({lang}): '{chunk[:50]}{'...' if len(chunk) > 50 else ''}'")
+
+                        # Thread-safe synthesis
+                        with processing_lock:
+                            try:
+                                audio_chunk = self._synthesize_chunk(chunk, lang, voice_or_embedding, speed)
+                                if audio_chunk is not None and audio_chunk.size > 0:
+                                    audio_queue.put(audio_chunk)
+                            except Exception as e:
+                                logger.error(f"Failed to synthesize chunk: {e}")
+                                continue  # Skip failed chunks instead of crashing
+
+            except Exception as e:
+                logger.error(f"Producer thread error: {e}")
+            finally:
+                audio_queue.put(None)  # Signal completion
 
         def consumer():
             try:
                 with sd.OutputStream(samplerate=SAMPLE_RATE, device=device_index, channels=1, dtype='float32') as stream:
                     while True:
                         if interrupt_event and interrupt_event.is_set(): break
-                        chunk = audio_queue.get()
-                        if chunk is None: break
-                        stream.write(chunk)
-            except Exception as e: logger.error(f"Audio playback error: {e}")
+                        try:
+                            chunk = audio_queue.get(timeout=30)  # Add timeout to prevent hanging
+                            if chunk is None: break
+                            stream.write(chunk)
+                        except Exception as e:
+                            logger.error(f"Audio playback error: {e}")
+                            break
+            except Exception as e:
+                logger.error(f"Consumer thread error: {e}")
 
-        threads = [threading.Thread(target=producer, daemon=True), threading.Thread(target=consumer, daemon=True)]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        # Start threads with error handling
+        threads = []
+        try:
+            producer_thread = threading.Thread(target=producer, daemon=True, name="KokoroProducer")
+            consumer_thread = threading.Thread(target=consumer, daemon=True, name="KokoroConsumer")
+            threads = [producer_thread, consumer_thread]
+
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=120)  # Add timeout to prevent hanging
+
+        except Exception as e:
+            logger.error(f"Threading error in stream: {e}")
+            if interrupt_event:
+                interrupt_event.set()  # Signal threads to stop
 
     # --- MEMORY SYNTHESIS ---
     def synthesize_to_memory(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> np.ndarray:

@@ -8,6 +8,14 @@ import json
 
 # Import from core
 from core.config_manager import load_config, save_config
+from core.app_state import (
+    register_mcp_log_callback,
+    start_mcp,
+    stop_mcp,
+    restart_mcp,
+    is_mcp_running,
+    set_mcp_auto_start,
+)
 from core.tts import (
     get_available_sapi_voices, get_kokoro_voices, get_output_devices,
     play_test_sound, speak_text, trigger_kokoro_model_download,
@@ -107,6 +115,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ollama_url_var = tk.StringVar(window, value=ollama_config.get('api_url', ''))
     ollama_model_var = tk.StringVar(window, value=ollama_config.get('model', ''))
     ai_speak_response_var = tk.BooleanVar(window, value=ollama_config.get('speak_response', True))
+    use_thinking_fillers_var = tk.BooleanVar(window, value=ollama_config.get('use_thinking_fillers', False))
     webhook_enabled_var = tk.BooleanVar(window, value=ollama_config.get('webhook_enabled', False))
     webhook_url_var = tk.StringVar(window, value=ollama_config.get('webhook_url', ''))
 
@@ -180,7 +189,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     notebook.pack(expand=True, fill="both")
 
     # --- Tabs ---
-    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API"]}
+    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API", "🛠️ MCP"]}
     for name, tab_frame in tabs.items():
         notebook.add(tab_frame, text=name)
 
@@ -288,6 +297,9 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
 
     test_button = ttk.Button(ollama_frame, text="Test Connection", command=lambda: test_ollama_connection(ollama_url_var.get()))
     test_button.grid(row=3, column=0, columnspan=3, pady=5)
+
+    # Add thinking fillers checkbox
+    ttk.Checkbutton(ollama_frame, text="Use thinking fillers (speaks phrases while AI processes)", variable=use_thinking_fillers_var).grid(row=4, column=0, columnspan=3, sticky="w", padx=5, pady=2)
 
     ai_modes_frame = ttk.LabelFrame(tabs["🤖 AI"], text="AI Modes", padding="10")
     ai_modes_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
@@ -794,6 +806,40 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ttk.Button(api_controls_frame, text="⏹️ Stop Server", command=stop_and_update).grid(row=0, column=1, sticky="ew", padx=5, pady=5)
     ttk.Button(api_controls_frame, text="🔄 Restart Server", command=restart_and_update).grid(row=0, column=2, sticky="ew", padx=5, pady=5)
 
+    # --- MCP Tab ---
+    mcp_frame = ttk.LabelFrame(tabs["🛠️ MCP"], text="MCP Server", padding="10")
+    mcp_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
+    mcp_frame.columnconfigure(1, weight=1)
+
+    mcp_auto_start_var = tk.BooleanVar(window, value=config.get('mcp', {}).get('auto_start', False))
+    ttk.Checkbutton(mcp_frame, text="Auto-start MCP server on launch", variable=mcp_auto_start_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=5)
+
+    mcp_status_label = ttk.Label(mcp_frame, text="MCP Status: Unknown")
+    mcp_status_label.grid(row=1, column=0, sticky="w", padx=5, pady=2)
+
+    mcp_log_panel = tk.Text(mcp_frame, height=10, wrap=tk.WORD, relief=tk.SOLID, borderwidth=1)
+    mcp_log_panel.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+    mcp_log_panel.configure(state="normal")
+    mcp_log_panel.delete(1.0, tk.END)
+    mcp_log_panel.configure(state="disabled")
+
+    def append_mcp_log(line):
+        mcp_log_panel.configure(state="normal")
+        mcp_log_panel.insert(tk.END, line + "\n")
+        mcp_log_panel.configure(state="disabled")
+        mcp_log_panel.yview(tk.END)
+
+    register_mcp_log_callback(append_mcp_log)
+
+    def update_mcp_status():
+        running = is_mcp_running()
+        mcp_status_label.config(text=f"MCP Status: {'Running' if running else 'Stopped'}")
+    update_mcp_status()
+
+    ttk.Button(mcp_frame, text="Start MCP", command=lambda: [start_mcp(), update_mcp_status()]).grid(row=3, column=0, sticky="ew", padx=5, pady=5)
+    ttk.Button(mcp_frame, text="Stop MCP", command=lambda: [stop_mcp(), update_mcp_status()]).grid(row=3, column=1, sticky="ew", padx=5, pady=5)
+    ttk.Button(mcp_frame, text="Restart MCP", command=lambda: [restart_mcp(), update_mcp_status()]).grid(row=4, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+
     # --- Save and Cancel Buttons ---
     def on_save():
         config['theme'] = theme_var.get()
@@ -809,6 +855,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         ollama_config_save['api_url'] = ollama_url_var.get()
         ollama_config_save['model'] = ollama_model_var.get()
         ollama_config_save['speak_response'] = ai_speak_response_var.get()
+        ollama_config_save['use_thinking_fillers'] = use_thinking_fillers_var.get()
         ollama_config_save['webhook_enabled'] = webhook_enabled_var.get()
         ollama_config_save['webhook_url'] = webhook_url_var.get()
         
@@ -867,6 +914,12 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         for action, hotkey_vars in hotkeys_vars.items():
             new_hotkeys[action] = [var.get() for var in hotkey_vars if var.get()]
         config['hotkeys'] = new_hotkeys
+
+        # Persist MCP settings
+        mcp_cfg = config.setdefault('mcp', {})
+        mcp_cfg['auto_start'] = mcp_auto_start_var.get()
+        # Apply immediately for future launches
+        set_mcp_auto_start(mcp_auto_start_var.get())
 
         save_config(config)
         messagebox.showinfo("Settings Saved", "Your settings have been saved. Please restart VibeType for all changes to take effect.")

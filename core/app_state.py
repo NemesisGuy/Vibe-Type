@@ -13,8 +13,68 @@ import core.clipboard_manager
 import core.transcript_saver
 import core.tts
 import core.ai
-from core.config_manager import load_config
+from core.config_manager import load_config, save_config
 from core.analytics import increment_usage
+from MCP.manager import MCPManager
+
+# --- MCP Manager (module-level wrappers for GUI) ---
+_mcp_manager = MCPManager()
+_mcp_log_callback = None
+try:
+    _mcp_auto_start = load_config().get('mcp', {}).get('auto_start', False)
+except Exception:
+    _mcp_auto_start = False
+
+
+def register_mcp_log_callback(callback):
+    """Registers a callback to receive MCP log lines."""
+    global _mcp_log_callback
+    _mcp_log_callback = callback
+    _mcp_manager.set_log_callback(callback)
+
+
+def start_mcp():
+    """Start the MCP server if not running."""
+    _mcp_manager.start()
+
+
+def stop_mcp():
+    """Stop the MCP server if running."""
+    _mcp_manager.stop()
+
+
+def restart_mcp():
+    """Restart the MCP server."""
+    _mcp_manager.restart()
+
+
+def is_mcp_running() -> bool:
+    """Return True if MCP server subprocess is running."""
+    return _mcp_manager.is_running()
+
+
+def set_mcp_auto_start(value: bool):
+    """Persist and apply the MCP auto-start preference."""
+    global _mcp_auto_start
+    _mcp_auto_start = bool(value)
+    cfg = load_config()
+    if 'mcp' not in cfg:
+        cfg['mcp'] = {}
+    cfg['mcp']['auto_start'] = _mcp_auto_start
+    save_config(cfg)
+
+
+def maybe_auto_start_mcp():
+    """Auto-start MCP on app launch if enabled in config."""
+    if _mcp_auto_start and not is_mcp_running():
+        print("Auto-starting MCP server...")
+        start_mcp()
+
+# Attempt auto-start on module import
+try:
+    maybe_auto_start_mcp()
+except Exception as _e:
+    print(f"Failed to auto-start MCP server: {_e}")
 
 # --- State & Command Queue ---
 is_recording = False
@@ -68,7 +128,42 @@ def _submit_to_ai(text: str, mode: str):
     increment_usage("ai_provider_usage", active_provider)
     increment_usage("ai_mode_usage", mode)
 
-    final_text = core.ai.get_ai_response(text, mode=mode)
+    # Check if we should use thinking fillers and if TTS is enabled
+    use_fillers = config.get('ai_providers', {}).get('Ollama', {}).get('use_thinking_fillers', False)  # Default to False
+    speak_response = config.get('ai_providers', {}).get('Ollama', {}).get('speak_response', True)
+    active_tts_provider = config.get('active_tts_provider', 'Unknown')
+    tts_enabled = config.get('tts_providers', {}).get(active_tts_provider, {}).get('enabled', False)
+
+    # Set up TTS callback for thinking fillers if both are enabled
+    tts_callback = None
+    if use_fillers and speak_response and tts_enabled:
+        def tts_callback_func(voice, text, language, speed):
+            """Callback to speak filler phrases during AI thinking"""
+            try:
+                import core.tts
+                # Use a shorter text preparation for fillers to avoid delays
+                clean_text = text.strip()
+                # Only speak if the text is reasonable length to avoid queue buildup
+                if len(clean_text) < 100:
+                    core.tts.speak_text(clean_text)
+            except Exception as e:
+                print(f"Error speaking filler phrase: {e}")
+
+        tts_callback = tts_callback_func
+
+    # Call AI with filler support
+    try:
+        final_text = core.ai.get_ai_response(text, mode=mode, use_fillers=use_fillers, tts_callback=tts_callback)
+    except Exception as e:
+        # Ensure fillers are stopped if AI call fails
+        if use_fillers:
+            try:
+                from core.thinking_fillers import thinking_fillers
+                thinking_fillers.stop_thinking_mode()
+            except Exception:
+                pass
+        raise e
+
     print(f"Final text after AI processing: {final_text}")
 
     if config.get('enable_text_injection', True):
@@ -78,13 +173,11 @@ def _submit_to_ai(text: str, mode: str):
     core.transcript_saver.save_transcript(f"Original: {text}\nAI: {final_text}")
 
     # Use the 'speak_response' setting from the Ollama provider config
-    if config.get('ai_providers', {}).get('Ollama', {}).get('speak_response', True):
-        active_tts_provider = config.get('active_tts_provider', 'Unknown')
-        if config.get('tts_providers', {}).get(active_tts_provider, {}).get('enabled'):
-            _update_status("Speaking")
-            increment_usage("tts_engine_usage", active_tts_provider)
-            text_for_speech = _strip_markdown_for_speech(final_text)
-            core.tts.speak_text(text_for_speech)
+    if speak_response and tts_enabled:
+        _update_status("Speaking")
+        increment_usage("tts_engine_usage", active_tts_provider)
+        text_for_speech = _strip_markdown_for_speech(final_text)
+        core.tts.speak_text(text_for_speech)
 
 def _processing_task(is_ai_task: bool, mode_override: str = None):
     _update_status("Transcribing")
@@ -132,7 +225,7 @@ def _read_smart_task():
             if selected_text and selected_text != original_clipboard:
                 break
         # Log raw clipboard content
-        print(f"[TTS] Raw selected_text: '{selected_text}'")
+        print(f"[TTS] Raw selected_text: '{selected_text[:100] if selected_text else 'None'}{'...' if selected_text and len(selected_text) > 100 else ''}'")
         text_to_speak = None
         source = ""
         if selected_text and selected_text.strip():
@@ -148,24 +241,42 @@ def _read_smart_task():
             increment_usage("tts_engine_usage", active_tts_provider)
             sanitized = _strip_logs_for_speech(text_to_speak)
             sanitized = _strip_markdown_for_speech(sanitized)
-            print(f"[TTS] Sanitized text: '{sanitized}'")
+            print(f"[TTS] Sanitized text: '{sanitized[:100] if sanitized else 'None'}{'...' if sanitized and len(sanitized) > 100 else ''}'")
+
+            # Check for very long text that might cause memory issues
+            if len(sanitized) > 5000:
+                print(f"[TTS] Warning: Very long text ({len(sanitized)} chars), truncating to prevent memory issues")
+                sanitized = sanitized[:5000] + "... (text truncated for performance)"
+
             if not sanitized.strip():
                 core.tts.speak_text("No text selected.")
                 print("[TTS] No text selected after sanitization.")
             else:
-                print(f"Reading from {source}: '{sanitized[:50]}...'")
+                print(f"Reading from {source}: '{sanitized[:50]}{'...' if len(sanitized) > 50 else ''}'")
                 _update_status("Speaking")
-                core.tts.speak_text(sanitized)
+
+                # Add error handling for TTS to prevent crashes
+                try:
+                    core.tts.speak_text(sanitized)
+                except Exception as e:
+                    print(f"[TTS] Error during speech synthesis: {e}")
+                    core.tts.speak_text("Error occurred during text to speech processing.")
         else:
             core.tts.speak_text("No text selected.")
             print("[TTS] No text selected or clipboard is empty.")
         time.sleep(1) # Give a moment for speech to start
     except Exception as e:
         print(f"ERROR in _read_smart_task: {e}")
-        core.tts.speak_text("Error reading text.")
+        try:
+            core.tts.speak_text("Error reading text.")
+        except Exception:
+            pass  # Avoid cascading errors
     finally:
         if original_clipboard is not None:
-            core.clipboard_manager.copy_to_clipboard(original_clipboard)
+            try:
+                core.clipboard_manager.copy_to_clipboard(original_clipboard)
+            except Exception as e:
+                print(f"Error restoring clipboard: {e}")
         _update_status("Idle")
 
 def _process_text_from_selection_or_clipboard_task(mode_override: str = None):
@@ -203,6 +314,37 @@ def _process_text_from_selection_or_clipboard_task(mode_override: str = None):
     except Exception as e:
         print(f"Error in _process_text_from_selection_or_clipboard_task: {e}")
         _update_status("Idle")
+
+class AppState:
+    def __init__(self):
+        self.mcp_manager = MCPManager()
+        self.mcp_auto_start = False  # This should be loaded from config
+        self.mcp_log_callback = None
+
+    def register_mcp_log_callback(self, callback):
+        self.mcp_log_callback = callback
+        if self.mcp_manager:
+            self.mcp_manager.set_log_callback(callback)
+
+    def start_mcp(self):
+        self.mcp_manager.start()
+
+    def stop_mcp(self):
+        self.mcp_manager.stop()
+
+    def restart_mcp(self):
+        self.mcp_manager.restart()
+
+    def is_mcp_running(self):
+        return self.mcp_manager.is_running()
+
+    def set_mcp_auto_start(self, value: bool):
+        self.mcp_auto_start = value
+        # Save to config if needed
+
+    def maybe_auto_start_mcp(self):
+        if self.mcp_auto_start and not self.is_mcp_running():
+            self.start_mcp()
 
 # --- Public Functions ---
 def toggle_dictation(is_ai_dictation: bool = False, mode_override: str = None):

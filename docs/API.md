@@ -1,9 +1,18 @@
 # VibeType Web API
 
-> **Recent Improvements (2025-09-17):**
-> - Kokoro TTS now supports robust polyglot (multi-language) synthesis, improved error handling, and optional phoneme logging. See FEATURES.md for details.
+> Recent Improvements (2025-09-24):
+> - Versioned API base path `/api/v1`.
+> - Kokoro TTS speak endpoint returns quickly with `{ status: "in_progress" }`.
+> - Queue/backpressure and health endpoint added to improve stability.
+> - Recommended to run under Waitress on Windows; Flask dev server is used as a fallback.
 
 This document provides details on the VibeType web API, which allows for programmatic interaction with the system's core functionalities.
+
+## Base Path
+
+All endpoints below are served under the versioned base path:
+
+- Base: `/api/v1`
 
 ## Kokoro TTS API
 
@@ -11,115 +20,122 @@ These endpoints provide access to the powerful, local Kokoro TTS engine.
 
 ### Get Supported Languages
 
-*   **Endpoint:** `/api/tts/kokoro/languages`
-*   **Method:** `GET`
-*   **Description:** Returns a JSON array of all supported languages, including "Auto-Detect".
-*   **Example Response:**
-    ```json
-    [
-        "Auto-Detect",
-        "English (US)",
-        "English (UK)",
-        "Japanese",
-        "Spanish",
-        "French",
-        "Hindi",
-        "Italian",
-        "Portuguese (BR)",
-        "Mandarin Chinese"
-    ]
-    ```
+- Endpoint: `/api/v1/tts/kokoro/languages`
+- Method: `GET`
+- Description: Returns a JSON array of all supported languages, including `"Auto-Detect"`.
+- Example Response:
+  ```json
+  [
+    "Auto-Detect",
+    "English (US)",
+    "English (UK)",
+    "Japanese",
+    "Spanish",
+    "French",
+    "Hindi",
+    "Italian",
+    "Portuguese (BR)",
+    "Mandarin Chinese"
+  ]
+  ```
 
 ### Get Available Voices
 
-*   **Endpoint:** `/api/tts/kokoro/voices`
-*   **Method:** `GET`
-*   **Description:** Returns a JSON array of available voices. Can be filtered by language.
-*   **Query Parameters:**
-    *   `language` (optional): The name of the language to filter by (e.g., "English (US)", "Japanese"). If not provided, all voices will be returned.
-*   **Example Request:**
-    ```
-    GET /api/tts/kokoro/voices?language=Japanese
-    ```
-*   **Example Response:**
+- Endpoint: `/api/v1/tts/kokoro/voices`
+- Method: `GET`
+- Description: Returns a JSON array of available voices. Can be filtered by language.
+- Query Parameters:
+  - `language` (optional): The name of the language to filter by (e.g., `English (US)`, `Japanese`).
+- Example Request:
+  ```
+  GET /api/v1/tts/kokoro/voices?language=Japanese
+  ```
+- Example Response:
+  ```json
+  ["am_adam", "af_nova", "am_eric", "zf_xiaoxiao", "..."]
+  ```
+
+### Get Available Models
+
+- Endpoint: `/api/v1/tts/kokoro/models`
+- Method: `GET`
+- Description: Returns the available Kokoro ONNX model variants.
+
+### Speak (fire-and-forget playback on server)
+
+- Endpoint: `/api/v1/tts/kokoro/speak`
+- Method: `POST`
+- Description: Triggers speech playback on the server audio device in the background; the request returns quickly.
+- Request Body (JSON):
+  - `text` (required): Text to speak.
+  - `voice` (required): Voice identifier.
+  - `language` (optional): Defaults to `"Auto-Detect"`.
+  - `speed` (optional): Defaults to `1.0`.
+- Success Response:
+  - Code: `200 OK`
+  - Body:
     ```json
-    [
-        "ja_01",
-        "ja_02",
-        "ja_03"
-    ]
+    { "status": "in_progress", "message": "Speech synthesis started" }
     ```
-
-### Synthesize Speech
-
-*   **Endpoint:** `/api/tts/kokoro/synthesize`
-*   **Method:** `POST`
-*   **Description:** Synthesizes speech from the provided text and returns the audio as a WAV file.
-*   **Request Body (JSON):**
-    *   `text` (required): The text to be synthesized.
-    *   `voice` (required): The name of the voice to use.
-    *   `language` (optional): The language of the text. Defaults to `"Auto-Detect"`.
-    *   `speed` (optional): The speech rate. Defaults to `1.0`.
-*   **Example Request:**
+- Busy Response (backpressure):
+  - Code: `429 Too Many Requests`
+  - Body:
     ```json
-    {
-        "text": "Hello world. こんにちは、世界",
-        "voice": "en_us_01",
-        "language": "Auto-Detect",
-        "speed": 1.2
-    }
+    { "status": "error", "message": "TTS queue is busy. Try again shortly." }
     ```
-*   **Success Response:**
-    *   **Code:** `200 OK`
-    *   **Content-Type:** `audio/wav`
-    *   The response body will contain the raw WAV audio data.
-*   **Error Response:**
-    *   **Code:** `400 Bad Request` or `500 Internal Server Error`
-    *   **Content-Type:** `application/json`
-    *   **Example Body:**
-        ```json
-        {
-            "error": "Missing required parameters: text, voice"
-        }
-        ```
+- Notes:
+  - The server limits concurrent TTS to improve stability and may queue requests.
+  - Clients should not wait for playback to complete; treat `200/in_progress` as accepted.
 
-## Implemented Endpoints
+### Synthesize (return audio)
 
-The following endpoints are currently available:
+- Endpoint: `/api/v1/tts/kokoro/synthesize`
+- Method: `POST`
+- Description: Synthesizes speech and returns a WAV file in the response.
+- Request Body (JSON):
+  - `text` (required)
+  - `voice` (required)
+  - `language` (optional, default `"Auto-Detect"`)
+  - `speed` (optional, default `1.0`)
+- Success Response:
+  - Code: `200 OK`
+  - Content-Type: `audio/wav`
+- Error Response:
+  - Code: `400` or `500`
+  - Content-Type: `application/json`
 
-### Get Supported Languages
-- **Endpoint:** `/api/tts/kokoro/languages`
-- **Method:** `GET`
-- **Description:** Returns a JSON array of all supported languages, including "Auto-Detect".
+### Phoneme Breakdown
 
-### Get Available Voices
-- **Endpoint:** `/api/tts/kokoro/voices`
-- **Method:** `GET`
-- **Description:** Returns a JSON array of available voices. Can be filtered by language.
-- **Query Parameters:**
-    - `language` (optional): The name of the language to filter by (e.g., "English (US)", "Japanese").
+- Endpoint: `/api/v1/tts/kokoro/phonemes`
+- Method: `POST`
+- Description: Returns the phoneme sequence and tokenization for the provided text (for debugging/education).
+- Request Body (JSON): `{ "text": "...", "language": "Auto-Detect" }`
 
-### Synthesize Speech
-- **Endpoint:** `/api/tts/kokoro/synthesize`
-- **Method:** `POST`
-- **Description:** Synthesizes speech from the provided text and returns the audio as a WAV file.
-- **Request Body (JSON):**
-    - `text` (required): The text to be synthesized.
-    - `voice` (required): The name of the voice to use.
-    - `language` (optional): The language of the text. Defaults to "Auto-Detect".
-    - `speed` (optional): The speech rate. Defaults to 1.0.
+### Health / Status
 
-## Planned/Experimental Endpoints
+- Endpoint: `/status`
+- Method: `GET`
+- Description: Returns API health plus TTS queue metrics.
+- Example Response:
+  ```json
+  {
+    "status": "ok",
+    "message": "API server is running.",
+    "version": "1.0",
+    "queue_len": 0,
+    "max_queue": 10,
+    "max_workers": 1
+  }
+  ```
 
-The following endpoints are planned or experimental and may not be available in your current build:
+## MCP Integration Notes
 
-- **Batch Synthesis Endpoint:** Submit multiple texts for synthesis in a single API call.
-- **Phoneme Breakdown Endpoint:** Return the phoneme sequence and tokenization for a given text (for debugging or educational use).
-- **Language Detection Endpoint:** Expose the language detection/segmentation logic as an API for external tools.
-- **Streaming Synthesis API:** Support real-time streaming of audio chunks over HTTP/WebSocket.
-- **Voice Blending API:** Allow users to create and manage custom blended voices via the API.
-- **API for Pronunciation Dictionary:** Let users upload/download custom pronunciation overrides.
+- The MCP speak tool treats slow HTTP responses as accepted, to avoid client-side timeouts.
+- To reduce permission prompts, use the `speak_batch` MCP tool to send multiple short lines in one request.
+- Recommended voices for reliability: `am_adam`, `am_eric`.
 
 ## Debugging and Logging
 
-- **Phoneme Logging:** You can enable detailed phoneme logging for each chunk by setting `SHOW_PHONEMES_IN_LOGS` in `kokoro_tts.py`. This is useful for debugging and understanding how text is processed internally.
+- Server logs include queue size and background playback completion notices.
+- On Windows, the API prefers **Waitress** for better concurrency; if not available, Flask dev server runs with `threaded=True`.
+- If you see `429` busy, wait a few seconds and retry with shorter lines.

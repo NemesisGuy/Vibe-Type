@@ -7,7 +7,16 @@ import soundfile as sf
 import io
 import logging
 import sys
-sys.path.append('..')
+import os
+import threading
+import re
+import time
+
+# Ensure project root is on sys.path for 'kokoro_tts' imports
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from kokoro_tts.kokoro_tts import KokoroTTS, SAMPLE_RATE
 
 app = Flask(__name__)
@@ -17,10 +26,19 @@ api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
 logger = logging.getLogger("api")
 logging.basicConfig(level=logging.INFO)
 
-# --- Utility: Standardized error response ---
+# --- Utility: Standardized error/ok response with Connection: close ---
+from flask import make_response
+
+def api_ok(payload, code=200):
+    resp = make_response(jsonify(payload), code)
+    resp.headers['Connection'] = 'close'
+    return resp
+
 def api_error(message, code=500, details=None):
     logger.error(f"API error: {message} | Details: {details}")
-    return jsonify({"status": "error", "message": message, "details": details}), code
+    resp = make_response(jsonify({"status": "error", "message": message, "details": details}), code)
+    resp.headers['Connection'] = 'close'
+    return resp
 
 # --- Initialize KokoroTTS ---
 try:
@@ -28,6 +46,56 @@ try:
 except Exception as e:
     kokoro_tts = None
     logger.critical(f"CRITICAL: Failed to initialize KokoroTTS. API will not work. Error: {e}")
+
+# --- Text normalization to reduce G2P hiccups (smart quotes/dashes, NBSP, mojibake) ---
+_MOJI_MAP = {
+    '\u2018': "'", '\u2019': "'",  # single quotes
+    '\u201C': '"', '\u201D': '"',  # double quotes
+    '\u2013': '-',  '\u2014': '-',  # en/em dash
+    '\u00A0': ' ',                   # non-breaking space
+    '\u2026': '...',                 # ellipsis
+}
+# Common mojibake patterns when UTF-8 seen as Latin-1
+_MOJI_MOJIBAKE = {
+    'â€™': "'",
+    'â€œ': '"', 'â€�': '"',
+    'â€"': '-', 'â€"': '-',
+}
+_WS_RE = re.compile(r"\s+")
+
+# Fallback mapping if KokoroTTS.LANGUAGE_CONFIG is unavailable
+_FALLBACK_LANG_CODES = {
+    'English (US)': 'a',
+    'Japanese': 'j',
+    'Mandarin Chinese': 'z',
+    'Spanish': 's',
+    'French': 'f',
+    'Portuguese (BR)': 'p',
+    'Italian': 'i',
+    'Hindi': 'h',
+}
+
+def _resolve_lang_code(lang_name: str):
+    try:
+        cfg = getattr(kokoro_tts, 'LANGUAGE_CONFIG', None)
+        if isinstance(cfg, dict) and lang_name in cfg and 'lang_code' in cfg[lang_name]:
+            return cfg[lang_name]['lang_code']
+    except Exception:
+        pass
+    return _FALLBACK_LANG_CODES.get(lang_name)
+
+def normalize_text(s: str) -> str:
+    if not s:
+        return s
+    # First pass: unicode translate
+    s = s.translate(str.maketrans(_MOJI_MAP))
+    # Second pass: fix common mojibake sequences
+    for bad, good in _MOJI_MOJIBAKE.items():
+        if bad in s:
+            s = s.replace(bad, good)
+    # Collapse whitespace
+    s = _WS_RE.sub(' ', s).strip()
+    return s
 
 # --- Kokoro TTS Endpoints ---
 @api_v1.route('/tts/kokoro/languages', methods=['GET'])
@@ -37,7 +105,7 @@ def get_kokoro_languages():
         return api_error("KokoroTTS not initialized", 500)
     try:
         languages = kokoro_tts.list_languages()
-        return jsonify(languages)
+        return api_ok(languages)
     except Exception as e:
         return api_error("Failed to list languages", 500, str(e))
 
@@ -49,7 +117,7 @@ def get_kokoro_voices():
     try:
         language = request.args.get('language', None)
         voices = kokoro_tts.list_voices(language_name=language)
-        return jsonify(voices)
+        return api_ok(voices)
     except Exception as e:
         return api_error("Failed to list voices", 500, str(e))
 
@@ -60,7 +128,7 @@ def get_kokoro_models():
         return api_error("KokoroTTS not initialized", 500)
     try:
         models = kokoro_tts.list_models()
-        return jsonify(models)
+        return api_ok(models)
     except Exception as e:
         return api_error("Failed to list models", 500, str(e))
 
@@ -73,6 +141,8 @@ def synthesize_kokoro_speech():
     if not data:
         return api_error("Invalid JSON body", 400)
     text = data.get('text')
+    # Normalize potentially problematic punctuation/encoding before G2P
+    text = normalize_text(text)
     language = data.get('language', 'Auto-Detect')
     voice = data.get('voice')
     speed = float(data.get('speed', 1.0))
@@ -90,7 +160,9 @@ def synthesize_kokoro_speech():
         wav_io = io.BytesIO()
         sf.write(wav_io, audio_samples, SAMPLE_RATE, format='WAV')
         wav_io.seek(0)
-        return Response(wav_io, mimetype='audio/wav')
+        resp = Response(wav_io, mimetype='audio/wav')
+        resp.headers['Connection'] = 'close'
+        return resp
     except Exception as e:
         return api_error("Synthesis failed", 500, str(e))
 
@@ -103,6 +175,8 @@ def get_kokoro_phonemes():
     if not data:
         return api_error("Invalid JSON body", 400)
     text = data.get('text')
+    # Normalize for G2P stability
+    text = normalize_text(text)
     language = data.get('language', 'Auto-Detect')
     voice = data.get('voice')
     if not text:
@@ -112,7 +186,8 @@ def get_kokoro_phonemes():
         segments = kokoro_tts._segment_by_language(text) if language == 'Auto-Detect' else [(language, text)]
         phoneme_results = []
         for lang, seg in segments:
-            g2p_engine = kokoro_tts._get_g2p_pipeline(kokoro_tts.LANGUAGE_CONFIG[lang]["lang_code"]) if lang in kokoro_tts.LANGUAGE_CONFIG else None
+            code = _resolve_lang_code(lang)
+            g2p_engine = kokoro_tts._get_g2p_pipeline(code) if code else None
             if not g2p_engine:
                 phoneme_results.append({"language": lang, "text": seg, "phonemes": None, "error": "No G2P engine"})
                 continue
@@ -130,9 +205,11 @@ def get_kokoro_phonemes():
                 phoneme_results.append({"language": lang, "text": seg, "phonemes": phoneme_str, "tokens": tokens})
             except Exception as g2p_e:
                 phoneme_results.append({"language": lang, "text": seg, "phonemes": None, "error": str(g2p_e)})
-        return jsonify(phoneme_results)
+        return api_ok(phoneme_results)
     except Exception as e:
-        return api_error("Phoneme breakdown failed", 500, str(e))
+        # Degrade gracefully: return a single-item array with error info (HTTP 200)
+        logger.error(f"phonemes unexpected error: {e}")
+        return api_ok([{"language": language, "text": text, "phonemes": None, "error": str(e)}])
 
 @api_v1.route('/tts/kokoro/speak', methods=['POST'])
 def speak_kokoro_speech():
@@ -143,11 +220,14 @@ def speak_kokoro_speech():
     if not data:
         return api_error("Invalid JSON body", 400)
     text = data.get('text')
+    # Normalize for G2P stability
+    text = normalize_text(text)
     language = data.get('language', 'Auto-Detect')
     voice = data.get('voice')
     speed = float(data.get('speed', 1.0))
     if not all([text, voice]):
         return api_error("Missing required parameters: text, voice", 400)
+
     def background_tts():
         try:
             kokoro_tts.stream(
@@ -161,18 +241,47 @@ def speak_kokoro_speech():
             logger.info(f"Background TTS playback completed for text: {text[:40]}...")
         except Exception as e:
             logger.error(f"Background TTS playback failed: {e}")
-    import threading
-    threading.Thread(target=background_tts, daemon=True).start()
-    # Spoof HTTP 200 instead of 202 for compatibility with MCP/agent
-    return jsonify({"status": "in_progress", "message": "Speech synthesis started"}), 200
+
+    # Simple fire-and-forget: spawn daemon thread and return immediately
+    thread = threading.Thread(target=background_tts, daemon=True)
+    thread.start()
+
+    # Return immediately for MCP/agents compatibility
+    return api_ok({"status": "in_progress", "message": "Speech synthesis started"}, 200)
 
 @api_v1.route('/status', methods=['GET'])
 def api_status():
-    """Simple health/status endpoint for API server."""
-    return jsonify({
+    """Simple health/status endpoint for API server (versioned)."""
+    return api_ok({
         "status": "ok",
         "message": "API server is running.",
         "version": "1.0"
+    })
+
+# Also expose a root-level /status for convenience (non-versioned)
+@app.route('/status', methods=['GET'])
+def api_status_root():
+    return api_ok({
+        "status": "ok",
+        "message": "API server is running.",
+        "version": "1.0"
+    })
+
+# Friendly root index so GET / returns helpful info instead of 404
+@app.route('/', methods=['GET'])
+def api_index():
+    return api_ok({
+        "message": "VibeType API",
+        "version": "1.0",
+        "endpoints": {
+            "status": "/status",
+            "languages": "/api/v1/tts/kokoro/languages",
+            "voices": "/api/v1/tts/kokoro/voices",
+            "models": "/api/v1/tts/kokoro/models",
+            "speak": "/api/v1/tts/kokoro/speak",
+            "synthesize": "/api/v1/tts/kokoro/synthesize",
+            "phonemes": "/api/v1/tts/kokoro/phonemes"
+        }
     })
 
 # --- Register Blueprint ---
@@ -180,8 +289,12 @@ app.register_blueprint(api_v1)
 
 if __name__ == '__main__':
     import socket
-    host = '0.0.0.0'
-    port = 9031
+    # Read overrides from environment
+    host = os.environ.get('VIBETYPE_API_HOST', '0.0.0.0')
+    try:
+        port = int(os.environ.get('VIBETYPE_API_PORT', '9031'))
+    except Exception:
+        port = 9031
     # Get local IP address
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -190,6 +303,12 @@ if __name__ == '__main__':
         s.close()
     except Exception:
         local_ip = '127.0.0.1'
-    logger.info(f"API server starting on http://{local_ip}:{port} (and 0.0.0.0:{port})")
-    print(f"API server starting on http://{local_ip}:{port} (and 0.0.0.0:{port})")
-    app.run(host=host, port=port)
+    logger.info(f"API server starting on http://{local_ip}:{port} and http://127.0.0.1:{port} (host={host})")
+    print(f"API server starting on http://{local_ip}:{port} and http://127.0.0.1:{port} (host={host})")
+    # Prefer Waitress if available for better concurrency on Windows
+    try:
+        import waitress
+        waitress.serve(app, host=host, port=port, threads=4)
+    except Exception as e:
+        logger.info(f"Waitress not available or failed ({e}); falling back to Flask dev server.")
+        app.run(host=host, port=port, threaded=True, use_reloader=False)
