@@ -29,6 +29,4 @@ strong belief in their own way.
 「もしおれがただ偶然、そしてこうしようというつもりでなくここに立っ Los partidos
 políticos tradicionales compiten con los populismos y
 
-
-
 The text explains that someone had a chance but didn’t want to come here, or a situation was unexpected.

@@ -22,7 +22,7 @@ SAMPLE_RATE = 24000
 PUNCTUATION_RE = r'(?<=[.!?。།、，,;:])\s*'
 LANGUAGE_CONFIG = {
     "Auto-Detect": {},
-    "English (US)": {"lang_code": "a", "detect_code": "en"},
+    "English (US)": {"lang_code": "a", "detect_code": "en", "espeak_lang": "en-us"},
     "Japanese": {"lang_code": "j", "detect_code": "ja"},
     "Mandarin Chinese": {"lang_code": "z", "detect_code": "zh-cn"},
     "Spanish": {"lang_code": "e", "espeak_lang": "es", "detect_code": "es"},
@@ -33,7 +33,7 @@ LANGUAGE_CONFIG = {
 }
 DETECT_CODE_MAP = {cfg["detect_code"]: name for name, cfg in LANGUAGE_CONFIG.items() if "detect_code" in cfg}
 
-SHOW_PHONEMES_IN_LOGS = True  # Set to True to log phoneme details for each chunk
+SHOW_PHONEMES_IN_LOGS = True
 
 class KokoroTTS:
     def __init__(self, model_file: str = "kokoro-v1.0.fp16.onnx", model_dir: str = "models/kokoro", execution_provider: str = 'CUDA'):
@@ -70,39 +70,23 @@ class KokoroTTS:
         pipeline = None
 
         try:
-            # Use timeout to prevent hanging on G2P initialization
-            import signal
-            import threading
-
-            def timeout_handler(signum, frame):
-                raise TimeoutError(f"G2P initialization timeout for lang_code '{lang_code}'")
-
-            # Set up timeout for G2P initialization (5 seconds max)
-            if hasattr(signal, 'SIGALRM'):  # Unix systems
-                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(5)
-
-            try:
-                if lang_code == 'j':
-                    pipeline = ja.JAG2P()
-                elif lang_code == 'a':
-                    # English G2P is causing hangs - add extra protection
-                    logger.info("Attempting English G2P initialization with timeout protection...")
-                    pipeline = en.G2P()
-                elif lang_code == 'z':
-                    pipeline = zh.ZHG2P()
+            if lang_code == 'j':
+                pipeline = ja.JAG2P()
+            elif lang_code == 'z':
+                pipeline = zh.ZHG2P()
+            else:
+                # For English and all other espeak-supported languages
+                cfg = next((c for c in LANGUAGE_CONFIG.values() if c.get('lang_code') == lang_code and 'espeak_lang' in c), None)
+                if cfg:
+                    logger.info(f"Using espeak for G2P with language: {cfg['espeak_lang']}")
+                    pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
                 else:
-                    cfg = next((c for c in LANGUAGE_CONFIG.values() if c.get('lang_code') == lang_code and 'espeak_lang' in c), None)
-                    if cfg:
-                        pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
-            finally:
-                if hasattr(signal, 'SIGALRM'):  # Reset alarm
-                    signal.alarm(0)
-                    signal.signal(signal.SIGALRM, old_handler)
+                    # Fallback for languages without a direct espeak mapping (should not happen with current config)
+                    logger.warning(f"No espeak configuration for lang_code '{lang_code}', falling back to English G2P.")
+                    pipeline = espeak.EspeakG2P(language='en-us')
 
-        except (TimeoutError, Exception) as e:
+        except Exception as e:
             logger.error(f"G2P initialization failed for lang_code '{lang_code}': {e}")
-            # Return None to indicate failure - synthesis will be skipped
             return None
 
         if pipeline:
@@ -126,7 +110,7 @@ class KokoroTTS:
             with requests.get(url, stream=True) as r:
                 r.raise_for_status()
                 total_size = int(r.headers.get('content-length', 0))
-                with open(dest, 'wb') as f, tqdm(total=total_size, unit='iB', unit_scale=True, desc=dest.name) as bar:
+                with open(dest, 'wb', buffering=8192) as f, tqdm(total=total_size, unit='iB', unit_scale=True, desc=dest.name) as bar:
                     for chunk in r.iter_content(chunk_size=8192):
                         bar.update(f.write(chunk))
         except Exception as e:
@@ -238,51 +222,32 @@ class KokoroTTS:
                 # Split by sentences or commas
                 parts = re.split(r'[.!?;,]\s*', text)
                 if len(parts) > 1:
+                    audio_pieces = []
                     for part in parts:
                         part = part.strip()
                         if part and len(part) > 3:  # Skip very short parts
                             try:
                                 chunk_audio = self._synthesize_chunk(part, language_name, voice_or_embedding, speed)
                                 if chunk_audio is not None:
-                                    return chunk_audio  # Return first successful synthesis
+                                    audio_pieces.append(chunk_audio)
                             except Exception:
                                 continue
+                    if audio_pieces:
+                        return np.concatenate(audio_pieces)
             logger.warning(f"All G2P attempts failed for text: '{text}' (lang: {language_name})")
             return None
 
         if SHOW_PHONEMES_IN_LOGS:
-            # Log phoneme string summary only (no individual word breakdown)
-            if isinstance(phonemes, tuple) and len(phonemes) == 2 and isinstance(phonemes[1], list):
-                logger.info(f"Phoneme string: {phonemes[0]}")
-                # Removed verbose word-by-word token logging to reduce log noise
-            else:
-                logger.info(f"Phoneme string: {phonemes}")
-
-        if logger.isEnabledFor(logging.DEBUG):
-            preview = (text[:60] + '…') if len(text) > 60 else text
-            if isinstance(phonemes, tuple) and len(phonemes) == 2 and isinstance(phonemes[1], list):
-                logger.debug(f"G2P ok ({language_name}): '{preview}' tokens={len(phonemes[1])}")
-            else:
-                logger.debug(f"G2P ok ({language_name}): '{preview}'")
+            # espeak G2P returns a string directly, not a tuple with a list of tokens
+            logger.info(f"Phoneme string: {phonemes}")
 
         # --- Robustly handle None phonemes ---
         if phonemes is None:
             logger.warning(f"G2P returned None for text: '{text}' (lang: {language_name})")
             return None
 
-        final_phonemes = phonemes[0] if isinstance(phonemes, tuple) else phonemes
-
-        if isinstance(final_phonemes, list):
-            filtered = [t for t in final_phonemes if getattr(t, 'phonemes', None) is not None]
-            if not filtered:
-                logger.warning(f"All tokens have None phonemes for text: '{text}' (lang: {language_name})")
-                return None
-            # Fix NoneType concatenation error by ensuring all values are properly converted to strings and handling None cases
-            final_phonemes = ''.join(
-                (str(getattr(t, 'phonemes', '') or '')) + (str(getattr(t, 'whitespace', '') or ''))
-                for t in filtered
-                if getattr(t, 'phonemes', None) is not None
-            )
+        # For espeak, phonemes is already a string. No need for complex tuple/list handling.
+        final_phonemes = str(phonemes) # Ensure it's a string
 
         if not final_phonemes or final_phonemes.isspace():
             logger.warning(f"Final phonemes empty or whitespace-only for text: '{text}' (lang: {language_name})")
