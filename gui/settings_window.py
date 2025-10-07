@@ -402,8 +402,17 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
             reset_analytics_data()
             populate_analytics_tree()
 
-    reset_button = ttk.Button(stats_frame, text="Reset Statistics", command=handle_reset_analytics)
-    reset_button.pack(pady=5)
+    # Create a frame for the buttons
+    analytics_buttons_frame = ttk.Frame(stats_frame)
+    analytics_buttons_frame.pack(fill="x", pady=5)
+
+    refresh_button = ttk.Button(analytics_buttons_frame, text="🔄 Refresh", command=populate_analytics_tree)
+    refresh_button.pack(side="left", padx=5)
+
+    reset_button = ttk.Button(analytics_buttons_frame, text="Reset Statistics", command=handle_reset_analytics)
+    reset_button.pack(side="left", padx=5)
+
+    populate_analytics_tree() # Initial population
 
     perf_frame = ttk.LabelFrame(analytics_container, text="Performance Dashboard", padding="10")
     perf_frame.pack(fill="x", expand=True, pady=5)

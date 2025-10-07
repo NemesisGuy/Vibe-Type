@@ -81,7 +81,7 @@ class KokoroTTS:
                     logger.info(f"Using espeak for G2P with language: {cfg['espeak_lang']}")
                     pipeline = espeak.EspeakG2P(language=cfg['espeak_lang'])
                 else:
-                    # Fallback for languages without a direct espeak mapping (should not happen with current config)
+                    # Fallback for languages without a direct espeak mapping
                     logger.warning(f"No espeak configuration for lang_code '{lang_code}', falling back to English G2P.")
                     pipeline = espeak.EspeakG2P(language='en-us')
 
@@ -121,34 +121,28 @@ class KokoroTTS:
     def _preprocess_text(self, text: str) -> str:
         return re.sub(r'\s+', ' ', text).strip()
 
-    # --- TRUE LANGUAGE-AWARE CHUNKING ---
     def _segment_by_language(self, text: str) -> List[tuple[str, str]]:
-        # Improved segmentation: group runs of the same script, robust langdetect for Latin (incl. extended)
         latin_class = r'A-Za-z\u00C0-\u024F\u1E00-\u1EFF0-9'
         script_regex = re.compile(
-            rf'([{latin_class} ,.;:!?"()\-\']+|'  # Latin (ASCII + extended) + spaces/punctuation
-            r'[\u4e00-\u9fff]+|'  # Han (Chinese)
-            r'[\u3040-\u30ff]+|' # Kana (Japanese)
-            r'[\u0900-\u097F]+|' # Devanagari (Hindi)
-            r'[\u0400-\u04FF]+|' # Cyrillic
-            r'[.,;:!?"()\-\']+|'   # Standalone punctuation
-            r'\s+)'                # Whitespace
+            rf'([{latin_class} ,.;:!?"()\-\']+|'
+            r'[\u4e00-\u9fff]+|'
+            r'[\u3040-\u30ff]+|'
+            r'[\u0900-\u097F]+|'
+            r'[\u0400-\u04FF]+|'
+            r'[.,;:!?"()\-\']+|'
+            r'\s+)'
         )
         segments = []
         for match in script_regex.finditer(text):
             seg = match.group(0)
             if seg.isspace():
                 continue
-            # Latin runs: use langdetect only for longer segments
             if re.match(rf'^[{latin_class} ,.;:!?"()\-\']+$', seg):
-                if len(seg.strip()) < 12:
+                try:
+                    lang_code = detect(seg)
+                    lang = DETECT_CODE_MAP.get(lang_code, 'English (US)')
+                except LangDetectException:
                     lang = 'English (US)'
-                else:
-                    try:
-                        lang_code = detect(seg)
-                        lang = DETECT_CODE_MAP.get(lang_code, 'English (US)')
-                    except LangDetectException:
-                        lang = 'English (US)'
             elif re.match(r'^[\u4e00-\u9fff]+$', seg):
                 lang = 'Mandarin Chinese'
             elif re.match(r'^[\u3040-\u30ff]+$', seg):
@@ -156,27 +150,16 @@ class KokoroTTS:
             elif re.match(r'^[\u0900-\u097F]+$', seg):
                 lang = 'Hindi'
             elif re.match(r'^[\u0400-\u04FF]+$', seg):
-                lang = 'Russian'
-            elif re.match(r'^[.,;:!?"()\-\']+$', seg):
-                # Attach punctuation to previous segment if possible
-                if segments:
-                    prev_lang, prev_seg = segments[-1]
-                    segments[-1] = (prev_lang, prev_seg + seg)
-                    continue
-                else:
-                    lang = 'English (US)'
+                lang = 'English (US)' # Default for Cyrillic, can be changed
             else:
                 lang = 'English (US)'
-            segments.append((lang, seg))
-        # Merge adjacent segments of same language
-        merged = []
-        for lang, seg in segments:
-            if merged and merged[-1][0] == lang:
-                merged[-1] = (lang, merged[-1][1] + seg)
+            
+            if segments and segments[-1][0] == lang:
+                segments[-1] = (lang, segments[-1][1] + seg)
             else:
-                merged.append((lang, seg))
-        logger.debug(f"Polyglot segmentation: {merged}")
-        return merged
+                segments.append((lang, seg))
+        logger.debug(f"Polyglot segmentation: {segments}")
+        return segments
 
     def _generate_linguistic_chunks(self, text: str, max_sentences: int = 4) -> Generator[str, None, None]:
         sentences = [s.strip() for s in re.split(PUNCTUATION_RE, text) if s.strip()]
@@ -185,22 +168,8 @@ class KokoroTTS:
 
     def _synthesize_chunk(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> Optional[np.ndarray]:
         logger.info(f"_synthesize_chunk called with text: '{text}', language: '{language_name}'")
-
-        # Preprocess and sanitize text to prevent G2P failures
         text = text.strip()
         if not text:
-            logger.info("Empty text after stripping, skipping chunk")
-            return None
-
-        # Remove problematic characters that can cause G2P issues
-        text = re.sub(r'[""''‚„«»‹›]', '"', text)  # Normalize quotes
-        text = re.sub(r'[–—−]', '-', text)  # Normalize dashes
-        text = re.sub(r'[…]', '...', text)  # Normalize ellipsis
-        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
-
-        # Allow Latin (basic+extended), digits, Han, Kana, Devanagari, Cyrillic
-        if not re.search(r'[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF\u4e00-\u9fff\u3040-\u30ff\u0900-\u097F\u0400-\u04FF]', text):
-            logger.info(f"Skipping punctuation/symbol-only chunk: '{text}'")
             return None
 
         lang_code = LANGUAGE_CONFIG[language_name].get("lang_code")
@@ -211,139 +180,65 @@ class KokoroTTS:
             logger.warning(f"No G2P engine for language '{language_name}'. Skipping.")
             return None
 
-        # Enhanced G2P processing with better error handling
         try:
             phonemes = g2p_engine(text)
+            # Handle espeak returning a tuple (phonemes, None)
+            if isinstance(phonemes, tuple):
+                phonemes = phonemes[0]
         except Exception as e:
             logger.warning(f"G2P failed for text: '{text}' (lang: {language_name}): {e}")
-            # Try fallback: split into smaller pieces and retry
-            if len(text) > 50:
-                logger.info(f"Attempting to split long text for G2P retry: '{text[:30]}...'")
-                # Split by sentences or commas
-                parts = re.split(r'[.!?;,]\s*', text)
-                if len(parts) > 1:
-                    audio_pieces = []
-                    for part in parts:
-                        part = part.strip()
-                        if part and len(part) > 3:  # Skip very short parts
-                            try:
-                                chunk_audio = self._synthesize_chunk(part, language_name, voice_or_embedding, speed)
-                                if chunk_audio is not None:
-                                    audio_pieces.append(chunk_audio)
-                            except Exception:
-                                continue
-                    if audio_pieces:
-                        return np.concatenate(audio_pieces)
-            logger.warning(f"All G2P attempts failed for text: '{text}' (lang: {language_name})")
             return None
 
         if SHOW_PHONEMES_IN_LOGS:
-            # espeak G2P returns a string directly, not a tuple with a list of tokens
             logger.info(f"Phoneme string: {phonemes}")
 
-        # --- Robustly handle None phonemes ---
-        if phonemes is None:
-            logger.warning(f"G2P returned None for text: '{text}' (lang: {language_name})")
-            return None
-
-        # For espeak, phonemes is already a string. No need for complex tuple/list handling.
-        final_phonemes = str(phonemes) # Ensure it's a string
-
-        if not final_phonemes or final_phonemes.isspace():
-            logger.warning(f"Final phonemes empty or whitespace-only for text: '{text}' (lang: {language_name})")
-            return None
-
-        # Additional safety check before synthesis
-        if not isinstance(final_phonemes, str):
-            logger.warning(f"Final phonemes not a string for text: '{text}' (lang: {language_name}): {type(final_phonemes)}")
+        if not phonemes or phonemes.isspace():
+            logger.warning(f"G2P returned None or empty for text: '{text}' (lang: {language_name})")
             return None
 
         try:
-            return self.kokoro.create(final_phonemes, voice=voice_or_embedding, speed=speed, is_phonemes=True)[0]
+            return self.kokoro.create(phonemes, voice=voice_or_embedding, speed=speed, is_phonemes=True)[0]
         except Exception as e:
-            logger.error(f"Kokoro synthesis failed for text: '{text}' (lang: {language_name}): {e}")
+            logger.error(f"Kokoro synthesis failed for text: '{text}': {e}")
             return None
 
-    # --- STREAMING ---
     def stream(self, text: Union[str, List[str]], language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0, device_index: Optional[int] = None, interrupt_event: Optional[threading.Event] = None):
         if isinstance(text, list): text = " ".join(text)
         clean_text = self._preprocess_text(text)
         audio_queue = Queue(maxsize=20)
 
-        # Add memory and threading safety for polyglot processing
-        max_chunks_per_batch = 10  # Limit concurrent processing to prevent memory issues
-        processing_lock = threading.Lock()
-
         def producer():
             try:
                 segments = self._segment_by_language(clean_text) if language_name == "Auto-Detect" else [(language_name, clean_text)]
-
-                # Process segments in smaller batches to prevent memory overload
-                chunk_count = 0
                 for lang, seg_text in segments:
                     if interrupt_event and interrupt_event.is_set(): break
-
                     for chunk in self._generate_linguistic_chunks(seg_text):
                         if interrupt_event and interrupt_event.is_set(): break
-
-                        # Limit concurrent processing to prevent memory issues
-                        chunk_count += 1
-                        if chunk_count > max_chunks_per_batch:
-                            # Brief pause to prevent memory overload
-                            import time
-                            time.sleep(0.1)
-                            chunk_count = 0
-
                         logger.info(f"Synthesizing chunk ({lang}): '{chunk[:50]}{'...' if len(chunk) > 50 else ''}'")
-
-                        # Thread-safe synthesis
-                        with processing_lock:
-                            try:
-                                audio_chunk = self._synthesize_chunk(chunk, lang, voice_or_embedding, speed)
-                                if audio_chunk is not None and audio_chunk.size > 0:
-                                    audio_queue.put(audio_chunk)
-                            except Exception as e:
-                                logger.error(f"Failed to synthesize chunk: {e}")
-                                continue  # Skip failed chunks instead of crashing
-
-            except Exception as e:
-                logger.error(f"Producer thread error: {e}")
+                        audio_chunk = self._synthesize_chunk(chunk, lang, voice_or_embedding, speed)
+                        if audio_chunk is not None and audio_chunk.size > 0:
+                            audio_queue.put(audio_chunk)
             finally:
-                audio_queue.put(None)  # Signal completion
+                audio_queue.put(None)
 
         def consumer():
             try:
                 with sd.OutputStream(samplerate=SAMPLE_RATE, device=device_index, channels=1, dtype='float32') as stream:
                     while True:
                         if interrupt_event and interrupt_event.is_set(): break
-                        try:
-                            chunk = audio_queue.get(timeout=30)  # Add timeout to prevent hanging
-                            if chunk is None: break
-                            stream.write(chunk)
-                        except Exception as e:
-                            logger.error(f"Audio playback error: {e}")
-                            break
+                        chunk = audio_queue.get()
+                        if chunk is None: break
+                        stream.write(chunk)
             except Exception as e:
-                logger.error(f"Consumer thread error: {e}")
+                logger.error(f"Audio playback error: {e}")
 
-        # Start threads with error handling
-        threads = []
-        try:
-            producer_thread = threading.Thread(target=producer, daemon=True, name="KokoroProducer")
-            consumer_thread = threading.Thread(target=consumer, daemon=True, name="KokoroConsumer")
-            threads = [producer_thread, consumer_thread]
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        consumer_thread = threading.Thread(target=consumer, daemon=True)
+        producer_thread.start()
+        consumer_thread.start()
+        producer_thread.join()
+        consumer_thread.join()
 
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=120)  # Add timeout to prevent hanging
-
-        except Exception as e:
-            logger.error(f"Threading error in stream: {e}")
-            if interrupt_event:
-                interrupt_event.set()  # Signal threads to stop
-
-    # --- MEMORY SYNTHESIS ---
     def synthesize_to_memory(self, text: str, language_name: str, voice_or_embedding: Union[str, np.ndarray], speed: float = 1.0) -> np.ndarray:
         clean_text = self._preprocess_text(text)
         segments = self._segment_by_language(clean_text) if language_name == "Auto-Detect" else [(language_name, clean_text)]
@@ -355,7 +250,6 @@ class KokoroTTS:
                     audio_chunks.append(audio_chunk)
         return np.concatenate(audio_chunks) if audio_chunks else np.array([], dtype=np.float32)
 
-    # --- UTILITIES ---
     def list_languages(self) -> List[str]:
         return list(LANGUAGE_CONFIG.keys())
 
