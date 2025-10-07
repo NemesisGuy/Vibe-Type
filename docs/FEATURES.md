@@ -83,12 +83,23 @@ Choose the voice you want to hear for audio feedback. All local models should be
 *   **Piper TTS (Local):**
     *   **Type:** Custom Local
     *   **Default:** Disabled
-    *   **Description:** A fast, efficient, and high-quality local TTS engine. Requires model files to be placed in the `/models/piper` directory.
-    *   **Configuration:** Select the desired model file and voice from the settings window.
+    *   **Description:** A fast, efficient, and high-quality local TTS engine. Models are managed via the **Models** tab in the settings.
+    *   **Configuration:** 
+        *   Select the desired model file and voice from the settings window.
+        *   **Hardware Acceleration:** You can select the execution provider (e.g., `CPU`, `CUDA`, `Tensorrt`) for Piper in the **Hardware** tab to leverage GPU acceleration for faster voice synthesis.
 
 *   **Kitten TTS (Coming Soon):**
     *   **Type:** Custom Local
     *   **Description:** An upcoming, high-performance TTS engine.
+
+## Model Management (Piper TTS)
+
+The **Models** tab in the settings window provides a simple interface for managing your local Piper TTS models.
+
+*   **Find More Models:** Opens a web browser to the official Piper models page on Hugging Face, where you can download new voices.
+*   **Import Model(s):** Opens a file dialog to import downloaded models. Simply select the `.onnx` file for the model you wish to import, and VibeType will automatically copy both the model and its corresponding `.json` configuration file into your library.
+*   **Delete Selected:** Removes the selected model from your library.
+*   **Refresh List:** The model list automatically refreshes after any import or deletion.
 
 ## The AI Toolkit: Prompt Templates
 

@@ -24,7 +24,7 @@ from core.tts import (
     test_sapi_voice, test_piper_voice, test_openai_voice, get_kokoro_languages
 )
 from core.ai import test_ollama_connection, send_webhook_test, get_ai_response, get_ollama_models
-from core.model_manager import delete_piper_model
+from core.model_manager import delete_piper_model, import_piper_models
 from core.transcript_saver import clear_transcript_history
 from core.analytics import load_analytics_data, reset_analytics_data
 from core.performance_monitor import get_performance_metrics
@@ -161,6 +161,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
 
     hardware_config = config.get('hardware', {})
     kokoro_execution_provider_var = tk.StringVar(window, value=hardware_config.get('kokoro_execution_provider', 'CPU'))
+    piper_execution_provider_var = tk.StringVar(window, value=hardware_config.get('piper_execution_provider', 'CPU'))
     whisper_execution_provider_var = tk.StringVar(window, value=hardware_config.get('whisper_execution_provider', 'CPU'))
 
     audio_config = config.get('audio', {})
@@ -221,6 +222,11 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     hotkey_canvas.configure(yscrollcommand=hotkey_scrollbar.set)
     hotkey_canvas.pack(side="left", fill="both", expand=True)
     hotkey_scrollbar.pack(side="right", fill="y")
+
+    # Configure grid columns for horizontal wrapping
+    max_columns = 3
+    for i in range(max_columns):
+        hotkey_scrollable_frame.columnconfigure(i, weight=1)
     
     action_frames, all_hotkey_entries = {}, []
     def check_for_conflicts():
@@ -255,12 +261,20 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         all_hotkey_entries[:] = [e for e in all_hotkey_entries if e.getvar(e['textvariable']) != var_to_remove.get()]
         _redraw_action_frame(action)
 
-    for i, (action, hotkeys) in enumerate(hotkeys_vars.items()):
+    # Grid layout for hotkey action frames
+    row, col = 0, 0
+    for action, hotkeys in hotkeys_vars.items():
         action_frame = ttk.LabelFrame(hotkey_scrollable_frame, text=action.replace('_', ' ').title(), padding="10")
-        action_frame.grid(row=i, column=0, sticky="ew", padx=10, pady=5)
+        action_frame.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
         action_frame.columnconfigure(0, weight=1)
         action_frames[action] = action_frame
         _redraw_action_frame(action)
+        
+        col += 1
+        if col >= max_columns:
+            col = 0
+            row += 1
+            
     check_for_conflicts()
 
     # --- AI Tab ---
@@ -637,9 +651,31 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     piper_main_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
     piper_main_frame.columnconfigure(1, weight=1)
     ttk.Checkbutton(piper_main_frame, text="Enable Piper TTS", variable=piper_enabled_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=5)
+    
+    # Create a frame for the model dropdown and its refresh button
+    piper_model_frame = ttk.Frame(piper_main_frame)
+    piper_model_frame.grid(row=1, column=1, sticky="ew", padx=5)
+    piper_model_frame.columnconfigure(0, weight=1)
+
+    piper_model_menu = ttk.OptionMenu(piper_model_frame, piper_model_file_var, piper_model_file_var.get() or "Select a model")
+    piper_model_menu.grid(row=0, column=0, sticky="ew")
+
+    def refresh_piper_model_dropdown():
+        """Refreshes the Piper model dropdown menu."""
+        models = get_piper_model_files()
+        menu = piper_model_menu["menu"]
+        menu.delete(0, "end")
+        for model in models:
+            menu.add_command(label=model, command=lambda value=model: piper_model_file_var.set(value))
+        if not piper_model_file_var.get() in models:
+            piper_model_file_var.set(models[0] if models else "")
+
+    refresh_piper_model_dropdown() # Initial population
+
+    piper_model_refresh_button = ttk.Button(piper_model_frame, text="🔄", command=refresh_piper_model_dropdown, width=3)
+    piper_model_refresh_button.grid(row=0, column=1, padx=(5, 0))
+
     ttk.Label(piper_main_frame, text="Model File:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-    piper_model_menu = ttk.OptionMenu(piper_main_frame, piper_model_file_var, piper_model_file_var.get() or "Select a model", *get_piper_model_files())
-    piper_model_menu.grid(row=1, column=1, sticky="ew", padx=5)
     ttk.Label(piper_main_frame, text="Voice:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
     piper_voice_menu = ttk.OptionMenu(piper_main_frame, piper_voice_var, "Select a voice")
     piper_voice_menu.grid(row=2, column=1, sticky="ew", padx=5)
@@ -695,8 +731,12 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     hardware_frame.columnconfigure(1, weight=1)
     ttk.Label(hardware_frame, text="Kokoro TTS:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
     ttk.OptionMenu(hardware_frame, kokoro_execution_provider_var, kokoro_execution_provider_var.get(), "CPU", "CUDA").grid(row=0, column=1, sticky="ew", padx=5)
-    ttk.Label(hardware_frame, text="Whisper:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
-    ttk.OptionMenu(hardware_frame, whisper_execution_provider_var, whisper_execution_provider_var.get(), "CPU", "GPU").grid(row=1, column=1, sticky="ew", padx=5)
+    
+    ttk.Label(hardware_frame, text="Piper TTS:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+    ttk.OptionMenu(hardware_frame, piper_execution_provider_var, piper_execution_provider_var.get(), "CPU", "CUDA", "Tensorrt").grid(row=1, column=1, sticky="ew", padx=5)
+    
+    ttk.Label(hardware_frame, text="Whisper:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+    ttk.OptionMenu(hardware_frame, whisper_execution_provider_var, whisper_execution_provider_var.get(), "CPU", "GPU").grid(row=2, column=1, sticky="ew", padx=5)
 
     # --- Audio I/O Tab ---
     audio_io_frame = ttk.Frame(tabs["🎤 Audio I/O"], padding="10")
@@ -731,8 +771,14 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         piper_model_listbox.delete(0, tk.END)
         for model_file in get_piper_model_files():
             piper_model_listbox.insert(tk.END, model_file)
+        # Also refresh the main dropdown
+        refresh_piper_model_dropdown()
 
     refresh_piper_model_list()
+
+    def handle_import_models():
+        if import_piper_models():
+            refresh_piper_model_list()
 
     def delete_selected_piper_model():
         selected_indices = piper_model_listbox.curselection()
@@ -745,14 +791,24 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
             refresh_piper_model_list()
             piper_model_file_var.set('')
 
-    delete_button = ttk.Button(piper_models_frame, text="Delete Selected Model", command=delete_selected_piper_model)
-    delete_button.grid(row=1, column=0, sticky="w", padx=5, pady=5)
+    # Create a frame for the buttons
+    model_buttons_frame = ttk.Frame(piper_models_frame)
+    model_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
+    model_buttons_frame.columnconfigure(0, weight=1)
+    model_buttons_frame.columnconfigure(1, weight=1)
+    model_buttons_frame.columnconfigure(2, weight=1)
+
+    import_button = ttk.Button(model_buttons_frame, text="Import Model(s)...", command=handle_import_models)
+    import_button.grid(row=0, column=0, sticky="w", padx=5)
+
+    delete_button = ttk.Button(model_buttons_frame, text="Delete Selected", command=delete_selected_piper_model)
+    delete_button.grid(row=0, column=1, sticky="w", padx=5)
 
     def open_piper_models_page():
         webbrowser.open("https://huggingface.co/rhasspy/piper-voices/tree/main")
 
-    download_button = ttk.Button(piper_models_frame, text="Download More Models...", command=open_piper_models_page)
-    download_button.grid(row=1, column=1, sticky="e", padx=5, pady=5)
+    download_button = ttk.Button(model_buttons_frame, text="Find More Models...", command=open_piper_models_page)
+    download_button.grid(row=0, column=2, sticky="e", padx=5)
 
     # --- API Tab ---
     api_server_frame = ttk.LabelFrame(tabs["🌐 API"], text="API Server Settings", padding="10")
@@ -897,8 +953,12 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['model'] = piper_model_file_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['voice'] = piper_voice_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['length_scale'] = piper_length_scale_var.get()
-        config.setdefault('hardware', {})['kokoro_execution_provider'] = kokoro_execution_provider_var.get()
-        config.setdefault('hardware', {})['whisper_execution_provider'] = whisper_execution_provider_var.get()
+        
+        hardware_config_save = config.setdefault('hardware', {})
+        hardware_config_save['kokoro_execution_provider'] = kokoro_execution_provider_var.get()
+        hardware_config_save['piper_execution_provider'] = piper_execution_provider_var.get()
+        hardware_config_save['whisper_execution_provider'] = whisper_execution_provider_var.get()
+        
         config.setdefault('audio', {})['output_device_index'] = get_selected_device_index()
         config.setdefault('audio', {})['speak_transcription_result'] = speak_transcription_var.get()
         config.setdefault('history', {})['transcript_limit'] = transcript_limit_var.get()

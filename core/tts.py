@@ -88,7 +88,7 @@ def _initialize_kokoro_tts():
         kokoro_tts_instance = None
 
 def _initialize_piper_tts():
-    """Initializes the Piper TTS instance with a graceful fallback to CPU."""
+    """Initializes the Piper TTS instance."""
     global piper_tts_instance
     if piper_tts_instance is not None:
         return
@@ -107,27 +107,13 @@ def _initialize_piper_tts():
     preferred_provider = hardware_config.get('piper_execution_provider', 'CPU')
 
     try:
-        logger.info(f"Trying Piper TTS with provider: {preferred_provider}")
         piper_tts_instance = PiperTTS(
             model_path=model_path,
             execution_provider=preferred_provider
         )
-        logger.info("Piper TTS initialized successfully.")
     except Exception as e:
-        logger.error(f"WARN: Failed to initialize Piper TTS with {preferred_provider}: {e}")
-        if preferred_provider != 'CPU':
-            logger.warning("Attempting fallback to CPU for Piper TTS...")
-            try:
-                piper_tts_instance = PiperTTS(
-                    model_path=model_path,
-                    execution_provider='CPU'
-                )
-                logger.info("Piper TTS initialized successfully on CPU fallback.")
-            except Exception as e_cpu:
-                logger.error(f"FATAL: Could not initialize Piper TTS engine on CPU fallback: {e_cpu}")
-                piper_tts_instance = None
-        else:
-            piper_tts_instance = None
+        logger.error(f"FATAL: Could not initialize Piper TTS engine: {e}")
+        piper_tts_instance = None
 
 def _sapi_worker():
     """A dedicated worker for caching SAPI voices."""
@@ -373,21 +359,22 @@ def test_piper_voice(text: str, model_file: str, voice_name: str = None, length_
             hardware_config = config.get('hardware', {})
             model_path = get_resource_path(os.path.join("models", "piper", model_file))
             
+            # Create a temporary instance for testing. The constructor now handles logging.
             piper_instance = PiperTTS(
                 model_path=model_path,
                 execution_provider=hardware_config.get('piper_execution_provider', 'CPU')
             )
-            logger.info(f"Piper TTS using providers: {piper_instance.sess.get_providers()}")
             
             sentences = re.split(r'(?<=[.!?])\s+', text.replace('\n', ' '))
             for sentence in sentences:
                 if tts_interrupt_event.is_set():
                     break
+                # Use the temporary instance for streaming
                 piper_instance.stream(sentence, speaker_name=voice_name, length_scale=length_scale)
+
         except Exception as e:
             logger.error(f"An unexpected error occurred during Piper voice test: {e}")
     threading.Thread(target=task, daemon=True).start()
-
 
 def _speak_sapi(text: str, config: dict, device_index: int = None):
     try:
@@ -473,7 +460,7 @@ def _speak_piper(text: str, config: dict, device_index: int = None):
         return
 
     try:
-        logger.info(f"Piper TTS using providers: {piper_tts_instance.sess.get_providers()}")
+        # Logging is now handled by the PiperTTS class constructor, so this is not needed.
         piper_config = config.get('tts_providers', {}).get('Piper TTS', {})
         speaker_name = piper_config.get('voice') 
         length_scale = piper_config.get('length_scale', 1.0)
@@ -482,7 +469,7 @@ def _speak_piper(text: str, config: dict, device_index: int = None):
         for sentence in sentences:
             if tts_interrupt_event.is_set():
                 break
-            piper_instance.stream(sentence, speaker_name=speaker_name, length_scale=length_scale)
+            piper_tts_instance.stream(sentence, speaker_name=speaker_name, length_scale=length_scale)
 
     except Exception as e:
         logger.error(f"An unexpected error occurred with Piper TTS: {e}")

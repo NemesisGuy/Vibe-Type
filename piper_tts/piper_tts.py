@@ -40,10 +40,20 @@ class PiperTTS:
         available_providers = ort.get_available_providers()
         logger.info(f"PiperTTS available ONNX providers: {available_providers}")
 
-        providers = [f"{execution_provider.upper()}ExecutionProvider"]
-        logger.info(f"Attempting to initialize ONNX session with providers: {providers}")
-        self.sess = ort.InferenceSession(model_path, providers=providers)
-        logger.info(f"Piper TTS engine ready. Using providers: {self.sess.get_providers()}")
+        # Construct the full provider name, e.g., 'CUDAExecutionProvider'
+        provider_name = f"{execution_provider.upper()}ExecutionProvider"
+
+        # Check if the requested provider is available, otherwise default to CPU
+        if provider_name not in available_providers:
+            logger.warning(f"Requested provider '{provider_name}' is not available. Falling back to CPU.")
+            provider_name = 'CPUExecutionProvider'
+
+        logger.info(f"Attempting to initialize ONNX session with primary provider: {provider_name}")
+        self.sess = ort.InferenceSession(model_path, providers=[provider_name])
+        
+        # Log the actual providers being used by the session for clarity
+        actual_providers = self.sess.get_providers()
+        logger.info(f"Piper TTS engine ready. Active provider: {actual_providers[0]}. (Full list: {actual_providers})")
 
         self.sess_inputs_names = [i.name for i in self.sess.get_inputs()]
 
