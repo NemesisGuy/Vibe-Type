@@ -5,6 +5,7 @@ from tkinter import ttk, messagebox
 import webbrowser
 import os
 import json
+import requests
 
 # Import from core
 from core.config_manager import load_config, save_config
@@ -15,6 +16,8 @@ from core.app_state import (
     restart_mcp,
     is_mcp_running,
     set_mcp_auto_start,
+    get_mcp_log_history,
+    clear_mcp_log_history,
 )
 from core.tts import (
     get_available_sapi_voices, get_kokoro_voices, get_output_devices,
@@ -25,7 +28,7 @@ from core.tts import (
 )
 from core.ai import test_ollama_connection, send_webhook_test, get_ai_response, get_ollama_models
 from core.model_manager import delete_piper_model, import_piper_models
-from core.transcript_saver import clear_transcript_history
+from core.transcript_saver import clear_transcript_history, open_transcript_history_folder
 from core.analytics import load_analytics_data, reset_analytics_data
 from core.performance_monitor import get_performance_metrics
 from core.api_manager import start_api_server, stop_api_server, restart_api_server, is_api_running
@@ -211,7 +214,11 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     history_frame.columnconfigure(1, weight=1)
     ttk.Label(history_frame, text="Transcript History Limit (0 for unlimited):").grid(row=0, column=0, sticky="w", padx=5, pady=2)
     ttk.Entry(history_frame, textvariable=transcript_limit_var, width=10).grid(row=0, column=1, sticky="w", padx=5)
-    ttk.Button(history_frame, text="Clear Transcript History", command=clear_transcript_history).grid(row=1, column=0, columnspan=2, pady=5)
+    
+    history_buttons_frame = ttk.Frame(history_frame)
+    history_buttons_frame.grid(row=1, column=0, columnspan=2, pady=5, sticky='w')
+    ttk.Button(history_buttons_frame, text="View History", command=open_transcript_history_folder).pack(side="left", padx=5)
+    ttk.Button(history_buttons_frame, text="Clear Transcript History", command=clear_transcript_history).pack(side="left", padx=5)
 
     # --- Hotkeys Tab ---
     hotkey_canvas = tk.Canvas(tabs["⌨️ Hotkeys"], bg=theme_bg, highlightthickness=0)
@@ -884,17 +891,24 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
 
     mcp_log_panel = tk.Text(mcp_frame, height=10, wrap=tk.WORD, relief=tk.SOLID, borderwidth=1)
     mcp_log_panel.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
-    mcp_log_panel.configure(state="normal")
-    mcp_log_panel.delete(1.0, tk.END)
-    mcp_log_panel.configure(state="disabled")
+    mcp_log_panel.configure(state="disabled") # Start disabled
+
+    def populate_mcp_log():
+        mcp_log_panel.configure(state="normal")
+        mcp_log_panel.delete(1.0, tk.END)
+        for line in get_mcp_log_history():
+            mcp_log_panel.insert(tk.END, line + "\n")
+        mcp_log_panel.yview(tk.END)
+        mcp_log_panel.configure(state="disabled")
 
     def append_mcp_log(line):
         mcp_log_panel.configure(state="normal")
         mcp_log_panel.insert(tk.END, line + "\n")
-        mcp_log_panel.configure(state="disabled")
         mcp_log_panel.yview(tk.END)
+        mcp_log_panel.configure(state="disabled")
 
     register_mcp_log_callback(append_mcp_log)
+    populate_mcp_log() # Populate with history on open
 
     def update_mcp_status():
         running = is_mcp_running()
@@ -903,7 +917,48 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
 
     ttk.Button(mcp_frame, text="Start MCP", command=lambda: [start_mcp(), update_mcp_status()]).grid(row=3, column=0, sticky="ew", padx=5, pady=5)
     ttk.Button(mcp_frame, text="Stop MCP", command=lambda: [stop_mcp(), update_mcp_status()]).grid(row=3, column=1, sticky="ew", padx=5, pady=5)
-    ttk.Button(mcp_frame, text="Restart MCP", command=lambda: [restart_mcp(), update_mcp_status()]).grid(row=4, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+    ttk.Button(mcp_frame, text="Restart MCP", command=lambda: [restart_mcp(), update_mcp_status()]).grid(row=4, column=0, sticky="ew", padx=5, pady=5)
+    ttk.Button(mcp_frame, text="Clear Logs", command=lambda: [clear_mcp_log_history(), populate_mcp_log()]).grid(row=4, column=1, sticky="ew", padx=5, pady=5)
+
+    def ping_mcp():
+        host = config.get('mcp', {}).get('host', '127.0.0.1')
+        port = config.get('mcp', {}).get('port', 9032)
+        url = f"http://{host}:{port}/health"
+        try:
+            r = requests.get(url, timeout=2.0)
+            ok = (r.status_code == 200 and r.text.strip().lower() == 'ok')
+            if ok:
+                append_mcp_log(f"[GUI] MCP /health OK at {url}")
+                mcp_status_label.config(text="MCP Status: Healthy", foreground="green")
+                messagebox.showinfo("MCP Health", f"OK: {url}")
+            else:
+                append_mcp_log(f"[GUI] MCP /health BAD ({r.status_code}) at {url}")
+                mcp_status_label.config(text="MCP Status: Running (Health check failed)", foreground="orange")
+                messagebox.showwarning("MCP Health", f"Unexpected response ({r.status_code}): {r.text}")
+        except Exception as e:
+            append_mcp_log(f"[GUI] MCP /health ERROR: {e}")
+            mcp_status_label.config(text="MCP Status: Stopped or Unreachable", foreground="red")
+            messagebox.showerror("MCP Health", str(e))
+
+    def mcp_test_speak():
+        host = config.get('mcp', {}).get('host', '127.0.0.1')
+        port = config.get('mcp', {}).get('port', 9032)
+        url = f"http://{host}:{port}/speak"
+        payload = {"text": "Hello from VibeType MCP test."}
+        try:
+            r = requests.post(url, json=payload, timeout=3.0)
+            if r.status_code in (200, 202):
+                append_mcp_log("[GUI] MCP /speak accepted (test message queued)")
+                messagebox.showinfo("MCP Test Speak", "Test message queued for playback.")
+            else:
+                append_mcp_log(f"[GUI] MCP /speak failed ({r.status_code}): {r.text}")
+                messagebox.showwarning("MCP Test Speak", f"Failed: {r.status_code}\n{r.text}")
+        except Exception as e:
+            append_mcp_log(f"[GUI] MCP /speak ERROR: {e}")
+            messagebox.showerror("MCP Test Speak", str(e))
+
+    ttk.Button(mcp_frame, text="Ping MCP /health", command=ping_mcp).grid(row=5, column=0, sticky="ew", padx=5, pady=5)
+    ttk.Button(mcp_frame, text="Test Speak (Hello)", command=mcp_test_speak).grid(row=5, column=1, sticky="ew", padx=5, pady=5)
 
     # --- Save and Cancel Buttons ---
     def on_save():
@@ -914,6 +969,9 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         api_config_save['enabled'] = api_enabled_var.get()
         api_config_save['auto_start'] = api_auto_start_var.get()
         api_config_save['port'] = api_port_var.get()
+
+        # Persist MCP auto-start
+        set_mcp_auto_start(mcp_auto_start_var.get())
 
         ollama_config_save = config.setdefault('ai_providers', {}).setdefault('Ollama', {})
         ollama_config_save['enabled'] = ollama_enabled_var.get()

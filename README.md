@@ -24,6 +24,18 @@ VibeType is more than just a dictation tool. It's a suite of voice-powered utili
     *   **Voice Blending:** Create unique, custom voices by blending existing ones.
 *   **Customizable AI Modes:** Switch between different AI "personalities" (like Assistant, Corrector, or Summarizer) instantly.
 
+## MCP Server & GUI
+
+A lightweight local MCP server provides simple HTTP endpoints to enqueue speech for sequential playback (no overlapping).
+
+- Read: [docs/MCP.md](./docs/MCP.md)
+- Settings → 🛠️ MCP tab includes:
+  - Start/Stop/Restart MCP
+  - Live log panel + Clear Logs
+  - Ping MCP /health
+  - One-click Test Speak (queues a short hello)
+  - Auto-start MCP on launch
+
 ## Getting Started
 
 1.  Ensure you have a local [Ollama](https://ollama.com/) server running if you wish to use it.

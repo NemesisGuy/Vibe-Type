@@ -31,6 +31,8 @@ class MCPManager:
             return
         env = os.environ.copy()
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        # Force unbuffered output so GUI receives lines immediately
+        env.setdefault("PYTHONUNBUFFERED", "1")
         # Ensure PYTHONPATH includes project root for local imports
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")

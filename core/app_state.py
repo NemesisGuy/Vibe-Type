@@ -4,6 +4,7 @@ import threading
 import re
 import pyautogui
 import time
+from collections import deque
 
 # Import from core
 import core.audio_capture
@@ -20,38 +21,50 @@ from MCP.manager import MCPManager
 # --- MCP Manager (module-level wrappers for GUI) ---
 _mcp_manager = MCPManager()
 _mcp_log_callback = None
+_mcp_log_history = deque(maxlen=100)  # Store the last 100 log lines
+
 try:
     _mcp_auto_start = load_config().get('mcp', {}).get('auto_start', False)
 except Exception:
     _mcp_auto_start = False
 
+def _mcp_log_wrapper(line):
+    """Internal wrapper to store and forward MCP logs."""
+    _mcp_log_history.append(line)
+    if _mcp_log_callback:
+        _mcp_log_callback(line)
+
+# Always set the internal wrapper as the callback
+_mcp_manager.set_log_callback(_mcp_log_wrapper)
 
 def register_mcp_log_callback(callback):
-    """Registers a callback to receive MCP log lines."""
+    """Registers a GUI callback to receive MCP log lines."""
     global _mcp_log_callback
     _mcp_log_callback = callback
-    _mcp_manager.set_log_callback(callback)
 
+def get_mcp_log_history():
+    """Returns the recent history of MCP logs."""
+    return list(_mcp_log_history)
+
+def clear_mcp_log_history():
+    """Clears the MCP log history buffer."""
+    _mcp_log_history.clear()
 
 def start_mcp():
     """Start the MCP server if not running."""
     _mcp_manager.start()
 
-
 def stop_mcp():
     """Stop the MCP server if running."""
     _mcp_manager.stop()
-
 
 def restart_mcp():
     """Restart the MCP server."""
     _mcp_manager.restart()
 
-
 def is_mcp_running() -> bool:
     """Return True if MCP server subprocess is running."""
     return _mcp_manager.is_running()
-
 
 def set_mcp_auto_start(value: bool):
     """Persist and apply the MCP auto-start preference."""
@@ -62,7 +75,6 @@ def set_mcp_auto_start(value: bool):
         cfg['mcp'] = {}
     cfg['mcp']['auto_start'] = _mcp_auto_start
     save_config(cfg)
-
 
 def maybe_auto_start_mcp():
     """Auto-start MCP on app launch if enabled in config."""

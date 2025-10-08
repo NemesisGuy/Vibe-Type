@@ -1,6 +1,7 @@
 # core/transcript_saver.py
 
 import os
+import webbrowser
 from datetime import datetime
 from tkinter import messagebox
 from core.utils import get_config_path
@@ -10,6 +11,20 @@ def _get_log_dir():
     """Returns the directory where transcripts are stored."""
     config_dir = os.path.dirname(get_config_path())
     return os.path.join(config_dir, "logs")
+
+def open_transcript_history_folder():
+    """Opens the transcript history folder in the system's file explorer."""
+    log_dir = _get_log_dir()
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        # os.startfile is more reliable for opening directories on Windows
+        if os.name == 'nt':
+            os.startfile(log_dir)
+        else:
+            # Fallback for other OSes
+            webbrowser.open(f"file:///{os.path.realpath(log_dir)}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not open history folder: {e}")
 
 def _enforce_transcript_limit():
     """Deletes the oldest transcripts if the total number exceeds the configured limit."""
