@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 tts_queue = queue.Queue()
 tts_interrupt_event = threading.Event()
 current_playback = None
+tts_playback_lock = threading.Lock() # Lock to ensure sequential playback
 
 def stop_speech():
     """Stops the current speech and clears the queue."""
@@ -492,35 +493,39 @@ def _tts_worker():
     while True:
         try:
             text, override_device_index = tts_queue.get()
-            tts_interrupt_event.clear()
 
-            config = load_config()
-            provider = config.get('active_tts_provider', 'Windows SAPI')
-            provider_config = config.get('tts_providers', {}).get(provider, {})
+            with tts_playback_lock:
+                if tts_interrupt_event.is_set():
+                    tts_interrupt_event.clear() # Clear for the next run
+                    continue
 
-            if not provider_config.get('enabled'):
-                logger.warning(f"TTS provider '{provider}' is disabled.")
-                continue
+                config = load_config()
+                provider = config.get('active_tts_provider', 'Windows SAPI')
+                provider_config = config.get('tts_providers', {}).get(provider, {})
 
-            device_index = override_device_index
-            if device_index is None:
-                device_index = config.get('audio', {}).get('output_device_index')
+                if not provider_config.get('enabled'):
+                    logger.warning(f"TTS provider '{provider}' is disabled.")
+                    continue
 
-            logger.info(f"Speaking via {provider} on device {device_index}: '{text[:50]}...'")
+                device_index = override_device_index
+                if device_index is None:
+                    device_index = config.get('audio', {}).get('output_device_index')
 
-            engine_map = {
-                'Windows SAPI': _speak_sapi,
-                'OpenAI': _speak_openai,
-                'Kokoro TTS': _speak_kokoro,
-                'Piper TTS': _speak_piper
-            }
-            
-            speak_function = engine_map.get(provider)
-            if speak_function:
-                speak_function(text, config, device_index=device_index)
-            else:
-                logger.error(f"Error: Unknown TTS provider '{provider}'.")
-            
+                logger.info(f"Speaking via {provider} on device {device_index}: '{text[:50]}...'")
+
+                engine_map = {
+                    'Windows SAPI': _speak_sapi,
+                    'OpenAI': _speak_openai,
+                    'Kokoro TTS': _speak_kokoro,
+                    'Piper TTS': _speak_piper
+                }
+
+                speak_function = engine_map.get(provider)
+                if speak_function:
+                    speak_function(text, config, device_index=device_index)
+                else:
+                    logger.error(f"Error: Unknown TTS provider '{provider}'.")
+
             tts_queue.task_done()
 
         except Exception as e:

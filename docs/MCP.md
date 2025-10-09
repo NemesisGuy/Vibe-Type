@@ -39,8 +39,28 @@ curl -s -X POST http://127.0.0.1:9032/speak -H "Content-Type: application/json" 
 curl -s -X POST http://127.0.0.1:9032/speak_batch -H "Content-Type: application/json" -d "{\"texts\":[\"one\",\"two\",\"three\"]}"
 ```
 
+PowerShell examples (recommended on Windows)
+Note: In PowerShell, `curl` is an alias for Invoke-WebRequest. Use Invoke-RestMethod (or `curl.exe`) for JSON-friendly calls.
+
+```powershell
+# Health
+Invoke-RestMethod -Uri 'http://127.0.0.1:9032/health' -Method GET
+
+# Speak one line
+Invoke-RestMethod -Uri 'http://127.0.0.1:9032/speak' -Method POST -ContentType 'application/json' -Body '{ "text": "Hello from MCP" }'
+
+# Speak batch sequentially
+Invoke-RestMethod -Uri 'http://127.0.0.1:9032/speak_batch' -Method POST -ContentType 'application/json' -Body '{ "texts": ["one", "two", "three"] }'
+```
+
+Alternative: Force real curl on Windows
+```powershell
+curl.exe http://127.0.0.1:9032/health
+curl.exe -s -X POST http://127.0.0.1:9032/speak -H "Content-Type: application/json" -d '{"text":"Hello from MCP"}'
+curl.exe -s -X POST http://127.0.0.1:9032/speak_batch -H "Content-Type: application/json" -d '{"texts":["one","two","three"]}'
+```
+
 Notes
 - The MCP server uses the current TTS provider and output device you’ve configured in the app.
 - If you hear overlapping audio from other sources, MCP enqueued items will still play sequentially on the app’s main TTS path.
 - Logs stream line-by-line to the MCP tab; if you don’t see updates, click Restart MCP.
-

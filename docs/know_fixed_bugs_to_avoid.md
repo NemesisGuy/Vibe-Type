@@ -70,6 +70,24 @@ This document serves as a reference for subtle, hard-to-debug issues that have b
 
 ---
 
+### 6. Overlapping Audio in Batch Speech
+
+- **Symptom:** When using the `speak_batch` tool or the `/speak_batch` endpoint, multiple audio segments would play simultaneously instead of sequentially.
+- **Root Cause:** The `/speak_batch` endpoint was being called with parallel requests, and the underlying TTS worker thread (`_tts_worker` in `core/tts.py`) processed items from the `tts_queue` without a mechanism to ensure one speech task finished before the next one started.
+- **Solution:** A `threading.Lock` (`tts_playback_lock`) was introduced in `core/tts.py`. The `_tts_worker` now acquires this lock before processing a text from the queue and releases it only after the audio playback is complete. This enforces sequential, one-at-a-time processing of all TTS tasks, including those from the `/speak_batch` endpoint.
+- **Lesson:** When a worker thread consumes from a queue to perform I/O-bound tasks that must not overlap (like audio playback), use a lock to serialize the execution of the task itself.
+
+---
+
+### 7. Faulty Phoneme Generation Endpoint
+
+- **Symptom:** The `mcp_vibetts_mcp_phonemes` tool or direct calls to the `/phonemes` endpoint would fail, return incorrect data, or cause server errors.
+- **Root Cause:** The endpoint handler in `MCP/vibetts_mcp_server.py` contained unstable, experimental code (including module reloading) and was not correctly wired to the robust, multi-language phonemizer (`KokoroTTS.phonemize_text`) available in `core/tts.py`.
+- **Solution:** The `/phonemes` endpoint handler was rewritten to directly call `core.tts.kokoro_tts_instance.phonemize_text()`. This ensures that all phoneme generation requests are processed by the correct, stable, and fully-featured implementation that leverages the `misaki` library for accurate G2P conversion across all supported languages. The unstable reloading code was removed.
+- **Lesson:** Ensure that high-level tool wrappers and API endpoints correctly delegate to the core application logic where the stable, tested implementation resides. Avoid duplicating or creating partial, experimental implementations at the API layer.
+
+---
+
 ### Debugging Tools
 
 - **Phoneme Logging:**

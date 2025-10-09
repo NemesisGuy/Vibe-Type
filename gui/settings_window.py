@@ -960,6 +960,60 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ttk.Button(mcp_frame, text="Ping MCP /health", command=ping_mcp).grid(row=5, column=0, sticky="ew", padx=5, pady=5)
     ttk.Button(mcp_frame, text="Test Speak (Hello)", command=mcp_test_speak).grid(row=5, column=1, sticky="ew", padx=5, pady=5)
 
+    def mcp_test_speak_batch():
+        host = config.get('mcp', {}).get('host', '127.0.0.1')
+        port = config.get('mcp', {}).get('port', 9032)
+        url = f"http://{host}:{port}/speak_batch"
+        payload = {
+            "items": [
+                {"text": "This is the first message."},
+                {"text": "This is the second message, spoken after the first."},
+                {"text": "And this is the final message."}
+            ]
+        }
+        try:
+            r = requests.post(url, json=payload, timeout=5.0)
+            if r.status_code in (200, 202):
+                append_mcp_log(f"[GUI] MCP /speak_batch accepted ({len(payload['items'])} items)")
+                messagebox.showinfo("MCP Test Speak Batch", f"Batch of {len(payload['items'])} messages queued for sequential playback.")
+            else:
+                append_mcp_log(f"[GUI] MCP /speak_batch failed ({r.status_code}): {r.text}")
+                messagebox.showwarning("MCP Test Speak Batch", f"Failed: {r.status_code}\n{r.text}")
+        except Exception as e:
+            append_mcp_log(f"[GUI] MCP /speak_batch ERROR: {e}")
+            messagebox.showerror("MCP Test Speak Batch", str(e))
+
+    def mcp_test_phonemes():
+        host = config.get('mcp', {}).get('host', '127.0.0.1')
+        port = config.get('mcp', {}).get('port', 9032)
+        url = f"http://{host}:{port}/phonemes"
+        # Test with a simple English and a multilingual string
+        text_to_test = "Hello world. これは日本語です。"
+        payload = {"text": text_to_test, "language": "Auto-Detect"}
+        try:
+            r = requests.post(url, json=payload, timeout=5.0)
+            if r.status_code == 200:
+                data = r.json()
+                append_mcp_log(f"[GUI] MCP /phonemes OK. Segments: {len(data.get('segments', []))}")
+                # Pretty print the JSON to a message box
+                pretty_json = json.dumps(data, indent=2, ensure_ascii=False)
+                # Show in a new window with a text widget to allow scrolling
+                result_window = tk.Toplevel(window)
+                result_window.title("Phoneme Result")
+                result_text = tk.Text(result_window, wrap=tk.WORD, height=20, width=80)
+                result_text.pack(padx=10, pady=10, fill="both", expand=True)
+                result_text.insert(tk.END, pretty_json)
+                result_text.configure(state="disabled")
+            else:
+                append_mcp_log(f"[GUI] MCP /phonemes failed ({r.status_code}): {r.text}")
+                messagebox.showwarning("MCP Test Phonemes", f"Failed: {r.status_code}\n{r.text}")
+        except Exception as e:
+            append_mcp_log(f"[GUI] MCP /phonemes ERROR: {e}")
+            messagebox.showerror("MCP Test Phonemes", str(e))
+
+    ttk.Button(mcp_frame, text="Test /speak_batch", command=mcp_test_speak_batch).grid(row=6, column=0, sticky="ew", padx=5, pady=5)
+    ttk.Button(mcp_frame, text="Test /phonemes", command=mcp_test_phonemes).grid(row=6, column=1, sticky="ew", padx=5, pady=5)
+
     # --- Save and Cancel Buttons ---
     def on_save():
         config['theme'] = theme_var.get()

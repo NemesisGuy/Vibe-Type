@@ -142,10 +142,14 @@ Kokoro TTS automatically detects available hardware and will use GPU acceleratio
 
 - VibeType now manages the MCP server as a subprocess.
 - Features:
-  - Auto-start MCP server on launch (configurable in settings)
+  - Auto-start MCP server on launch (configurable in settings; persisted)
   - Manual Start/Stop/Restart controls in the GUI
   - Status indicator for MCP server (running/stopped)
   - MCP logs are viewable in the VibeType UI
+  - Clear Logs button for MCP panel
+  - Ping MCP /health button (shows Healthy/Unreachable and appends a log line)
+  - One-click Test Speak (Hello) button (queues a short line via MCP)
+  - Batch speech via local HTTP /speak_batch enqueues sequentially (no overlap)
   - Graceful shutdown of MCP server on VibeType exit
 - This removes the need to manually launch MCP in a separate terminal.
 

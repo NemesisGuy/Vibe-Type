@@ -264,3 +264,52 @@ class KokoroTTS:
         if not lang_code: return self.ALL_VOICES
         filtered_voices = [v for v in self.ALL_VOICES if v.startswith(lang_code)]
         return filtered_voices if filtered_voices else self.ALL_VOICES
+
+    def phonemize_text(self, text: str, language_name: str = "Auto-Detect") -> list[dict]:
+        """Return phoneme segments (language, chunk, phonemes) without synthesizing audio.
+        Falls back gracefully on errors and skips failing chunks.
+        """
+        results: list[dict] = []
+        clean_text = self._preprocess_text(text or "")
+        if not clean_text:
+            return results
+        segments = self._segment_by_language(clean_text) if language_name == "Auto-Detect" else [(language_name, clean_text)]
+        for lang, seg in segments:
+            for chunk in self._generate_linguistic_chunks(seg):
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+                lang_code = LANGUAGE_CONFIG.get(lang, {}).get("lang_code")
+                if not lang_code:
+                    results.append({"language": lang, "chunk": chunk, "phonemes": None, "error": f"No language code for '{lang}'"})
+                    continue
+                g2p_engine = self._get_g2p_pipeline(lang_code)
+                if not g2p_engine:
+                    results.append({"language": lang, "chunk": chunk, "phonemes": None, "error": f"No G2P engine for '{lang}'"})
+                    continue
+
+                phonemes = None
+                error_msg = None
+                try:
+                    phonemes_result = g2p_engine(chunk)
+                    # Handle espeak returning a tuple (phonemes, None)
+                    if isinstance(phonemes_result, tuple):
+                        phonemes = phonemes_result[0]
+                    else:
+                        phonemes = phonemes_result
+
+                    if not phonemes or (isinstance(phonemes, str) and phonemes.strip() == ""):
+                        error_msg = "G2P returned empty result"
+                        phonemes = None
+
+                except Exception as e:
+                    error_msg = f"G2P failed for chunk: {e}"
+                    logger.warning(f"Phoneme extraction failed for chunk '{chunk[:40]}': {e}")
+
+                results.append({
+                    "language": lang,
+                    "chunk": chunk,
+                    "phonemes": phonemes,
+                    "error": error_msg
+                })
+        return results
