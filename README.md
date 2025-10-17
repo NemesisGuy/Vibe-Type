@@ -18,10 +18,11 @@ VibeType is more than just a dictation tool. It's a suite of voice-powered utili
 *   **Standard Dictation:** Quickly transcribe your speech into any text field.
 *   **Multi-Provider AI Processing:** Use a local LLM (via Ollama) or a powerful external API (like Cohere) to process your speech for tasks like code generation, rephrasing, or command execution.
 *   **Clipboard Processing:** Apply AI transformations (like summarization or correction) to any text on your clipboard using your selected AI provider.
-*   **Advanced Multi-Language TTS:** Get audible feedback using the built-in Windows voice, an external API (like OpenAI), or the powerful, local **Kokoro TTS** engine. Kokoro TTS features:
+*   **Advanced Multi-Language TTS:** Get audible feedback using the built-in Windows voice, an external API (like OpenAI), or local engines such as **Kokoro TTS**, **Piper**, and the new **ZipVoice voice cloning** pipeline. Highlights include:
     *   **Automatic Language Detection:** Speak in multiple languages and have the TTS engine automatically switch voices.
     *   **Wide Language Support:** High-quality voices for English, Japanese, Spanish, French, Chinese, and more.
-    *   **Voice Blending:** Create unique, custom voices by blending existing ones.
+  *   **Voice Blending:** Create unique, custom voices by blending existing ones.
+  *   **Voice Cloning from Samples:** ZipVoice streams cloned voices using the PyTorch backend with GPU acceleration (optional ONNX support) so you can pick a sample clip in the settings UI and speak with that voice immediately.
 *   **Customizable AI Modes:** Switch between different AI "personalities" (like Assistant, Corrector, or Summarizer) instantly.
 
 ## MCP Server & GUI

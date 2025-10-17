@@ -1,0 +1,6 @@
+{
+  "model": "gemma3:270m",
+  "prompt": "Give me a single friendly sentence to read aloud, under 25 words, introducing yourself and wishing the listener a great day.",
+  "stream": false
+}
+

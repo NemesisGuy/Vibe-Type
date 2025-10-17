@@ -1,10 +1,53 @@
+import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import tkinter as tk
+from tkinter import ttk
+
+# Prepare mocks for modules that settings_window imports at module load time
+core_config_manager_mock = MagicMock()
+core_tts_mock = MagicMock()
+core_tts_mock.get_available_sapi_voices.return_value = []
+core_tts_mock.get_kokoro_voices.return_value = []
+core_tts_mock.get_output_devices.return_value = {"Default Device": 0}
+core_tts_mock.play_test_sound.return_value = None
+core_tts_mock.speak_text.return_value = None
+core_tts_mock.trigger_kokoro_model_download.return_value = None
+core_tts_mock.open_benchmark_folder.return_value = None
+core_tts_mock.get_kokoro_models.return_value = []
+core_tts_mock.trigger_kokoro_benchmark.return_value = None
+core_tts_mock.test_kokoro_voice.return_value = None
+core_tts_mock.get_piper_model_files.return_value = []
+core_tts_mock.get_voices_for_piper_model.return_value = []
+core_tts_mock.test_sapi_voice.return_value = None
+core_tts_mock.test_piper_voice.return_value = None
+core_tts_mock.test_openai_voice.return_value = None
+core_tts_mock.get_kokoro_languages.return_value = ["English (US)"]
+sample_stub = SimpleNamespace(name="zipvoice_sample", display_name="Sample Voice", wav_path="sample.wav", text_path="sample.txt")
+core_tts_mock.get_zipvoice_samples.return_value = [sample_stub]
+core_tts_mock.test_zipvoice_voice.return_value = None
+
+zipvoice_manager_mock = MagicMock()
+zipvoice_manager_mock.open_zipvoice_samples_folder.return_value = True
 
 # Mock the necessary modules before they are imported by the module we are testing
-with patch.dict('sys.modules', {'core.config_manager': MagicMock(), 'core.tts': MagicMock(), 'core.ai': MagicMock(), 'core.model_manager': MagicMock(), 'core.transcript_saver': MagicMock(), 'core.analytics': MagicMock(), 'core.performance_monitor': MagicMock(), 'webbrowser': MagicMock()}):
+with patch.dict('sys.modules', {
+    'core.config_manager': core_config_manager_mock,
+    'core.tts': core_tts_mock,
+    'core.ai': MagicMock(),
+    'core.model_manager': MagicMock(),
+    'core.transcript_saver': MagicMock(),
+    'core.analytics': MagicMock(),
+    'core.performance_monitor': MagicMock(),
+    'core.zipvoice_manager': zipvoice_manager_mock,
+    'webbrowser': MagicMock()
+}):
     from gui.settings_window import create_settings_window
+    settings_window_module = sys.modules.get('gui.settings_window')
+
+if settings_window_module is not None:
+    sys.modules['gui.settings_window'] = settings_window_module
 
 class TestPromptSettings(unittest.TestCase):
 
@@ -62,12 +105,21 @@ class TestPromptSettings(unittest.TestCase):
 
         def find_widgets(widget):
             nonlocal save_button
-            if isinstance(widget, tk.Button) and widget.cget('text') == '✔️ Save':
+            widget_class = widget.winfo_class()
+            if widget_class in {"TButton", "Button"} and widget.cget('text') == '✔️ Save':
                 save_button = widget
             if isinstance(widget, tk.Text):
-                # This is a bit of a hack to identify which text widget is which
-                # In a real app, you'd want to give them names or some other identifier
-                parent_tab_text = settings_window.nametowidget(widget.winfo_parent()).master.tab(settings_window.nametowidget(widget.winfo_parent()), "text")
+                parent_tab_text = None
+                ancestor = widget
+                while True:
+                    parent_name = ancestor.winfo_parent()
+                    if not parent_name:
+                        break
+                    ancestor = settings_window.nametowidget(parent_name)
+                    master = getattr(ancestor, "master", None)
+                    if master is not None and hasattr(master, "tab"):
+                        parent_tab_text = master.tab(ancestor, "text")
+                        break
                 if parent_tab_text in ["Summarize", "Explain", "Correct", "Chat"]:
                     prompt_entries[parent_tab_text] = widget
             for child in widget.winfo_children():

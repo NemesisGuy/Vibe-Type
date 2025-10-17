@@ -6,6 +6,7 @@ import webbrowser
 import os
 import json
 import requests
+from pathlib import Path
 
 # Import from core
 from core.config_manager import load_config, save_config
@@ -24,7 +25,8 @@ from core.tts import (
     play_test_sound, speak_text, trigger_kokoro_model_download,
     open_benchmark_folder, get_kokoro_models, trigger_kokoro_benchmark,
     test_kokoro_voice, get_piper_model_files, get_voices_for_piper_model,
-    test_sapi_voice, test_piper_voice, test_openai_voice, get_kokoro_languages
+    test_sapi_voice, test_piper_voice, test_openai_voice, get_kokoro_languages,
+    test_zipvoice_voice, get_zipvoice_samples
 )
 from core.ai import test_ollama_connection, send_webhook_test, get_ai_response, get_ollama_models
 from core.model_manager import delete_piper_model, import_piper_models
@@ -32,6 +34,7 @@ from core.transcript_saver import clear_transcript_history, open_transcript_hist
 from core.analytics import load_analytics_data, reset_analytics_data
 from core.performance_monitor import get_performance_metrics
 from core.api_manager import start_api_server, stop_api_server, restart_api_server, is_api_running
+from core.zipvoice_manager import open_zipvoice_samples_folder
 
 def create_settings_window(parent: tk.Tk, on_save_callback=None):
     config = load_config()
@@ -162,6 +165,32 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     piper_voice_var = tk.StringVar(window, value=piper_config.get('voice'))
     piper_length_scale_var = tk.DoubleVar(window, value=piper_config.get('length_scale', 1.0))
 
+    zipvoice_config = config.get('tts_providers', {}).get('ZipVoice TTS', {})
+    zipvoice_samples = get_zipvoice_samples()
+    zipvoice_samples_map = {sample.name: sample for sample in zipvoice_samples}
+    zipvoice_display_to_name = {sample.display_name: sample.name for sample in zipvoice_samples}
+    zipvoice_name_to_display = {sample.name: sample.display_name for sample in zipvoice_samples}
+
+    default_zipvoice_sample = zipvoice_config.get('sample_name')
+    if not default_zipvoice_sample or default_zipvoice_sample not in zipvoice_samples_map:
+        default_zipvoice_sample = zipvoice_samples[0].name if zipvoice_samples else ""
+
+    try:
+        zipvoice_speed_value = float(zipvoice_config.get('speed', 1.0) or 1.0)
+    except (TypeError, ValueError):
+        zipvoice_speed_value = 1.0
+
+    zipvoice_enabled_var = tk.BooleanVar(window, value=zipvoice_config.get('enabled', False))
+    zipvoice_sample_var = tk.StringVar(window, value=default_zipvoice_sample)
+    zipvoice_sample_display_var = tk.StringVar(
+        window,
+        value=zipvoice_name_to_display.get(default_zipvoice_sample, "No samples found" if not zipvoice_samples else zipvoice_samples[0].display_name)
+    )
+    zipvoice_model_var = tk.StringVar(window, value=zipvoice_config.get('model_name', 'zipvoice'))
+    zipvoice_backend_var = tk.StringVar(window, value=(zipvoice_config.get('backend') or 'torch').lower())
+    zipvoice_speed_var = tk.DoubleVar(window, value=zipvoice_speed_value)
+    zipvoice_prompt_preview_var = tk.StringVar(window, value="")
+
     hardware_config = config.get('hardware', {})
     kokoro_execution_provider_var = tk.StringVar(window, value=hardware_config.get('kokoro_execution_provider', 'CPU'))
     piper_execution_provider_var = tk.StringVar(window, value=hardware_config.get('piper_execution_provider', 'CPU'))
@@ -193,7 +222,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     notebook.pack(expand=True, fill="both")
 
     # --- Tabs ---
-    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API", "🛠️ MCP"]}
+    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🧬 ZipVoice TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API", "🛠️ MCP"]}
     for name, tab_frame in tabs.items():
         notebook.add(tab_frame, text=name)
 
@@ -741,6 +770,107 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         )
     ttk.Button(piper_test_frame, text="Test Voice", command=run_piper_test).grid(row=0, column=1, padx=5, pady=5)
 
+    # --- ZipVoice TTS Tab ---
+    zipvoice_main_frame = ttk.LabelFrame(tabs["🧬 ZipVoice TTS"], text="ZipVoice Voice Cloning", padding="10")
+    zipvoice_main_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
+    zipvoice_main_frame.columnconfigure(1, weight=1)
+    ttk.Checkbutton(zipvoice_main_frame, text="Enable ZipVoice TTS", variable=zipvoice_enabled_var).grid(row=0, column=0, columnspan=3, sticky="w", padx=5)
+
+    ttk.Label(zipvoice_main_frame, text="Model Variant:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+    ttk.OptionMenu(zipvoice_main_frame, zipvoice_model_var, zipvoice_model_var.get() or "zipvoice", "zipvoice", "zipvoice_distill").grid(row=1, column=1, sticky="ew", padx=5)
+
+    ttk.Label(zipvoice_main_frame, text="Backend:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+    ttk.OptionMenu(
+        zipvoice_main_frame,
+        zipvoice_backend_var,
+        zipvoice_backend_var.get() or "torch",
+        "torch",
+        "onnx",
+    ).grid(row=2, column=1, sticky="ew", padx=5)
+
+    ttk.Label(zipvoice_main_frame, text="Sample Voice Prompt:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+    sample_display_values = [sample.display_name for sample in zipvoice_samples] if zipvoice_samples else ["No samples available"]
+    zipvoice_sample_combo = ttk.Combobox(
+        zipvoice_main_frame,
+        textvariable=zipvoice_sample_display_var,
+        values=sample_display_values,
+        state="readonly" if zipvoice_samples else "disabled"
+    )
+    zipvoice_sample_combo.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
+    ttk.Button(zipvoice_main_frame, text="📁 Open Samples Folder", command=open_zipvoice_samples_folder).grid(row=3, column=2, padx=5, pady=2)
+
+    ttk.Label(zipvoice_main_frame, text="Speed Multiplier:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_speed_scale = ttk.Scale(zipvoice_main_frame, from_=0.6, to=1.4, orient='horizontal', variable=zipvoice_speed_var)
+    zipvoice_speed_scale.grid(row=4, column=1, sticky="ew", padx=5)
+    zipvoice_speed_value_label = ttk.Label(zipvoice_main_frame, text=f"{zipvoice_speed_var.get():.2f}")
+    zipvoice_speed_value_label.grid(row=4, column=2, padx=5)
+
+    def update_zipvoice_speed_display(*args):
+        zipvoice_speed_value_label.config(text=f"{zipvoice_speed_var.get():.2f}")
+
+    zipvoice_speed_var.trace_add("write", lambda *args: update_zipvoice_speed_display())
+    update_zipvoice_speed_display()
+
+    def update_zipvoice_preview():
+        selected_name = zipvoice_sample_var.get()
+        preview_text = "Select a sample to view its reference transcript."
+        sample_meta = zipvoice_samples_map.get(selected_name)
+        if sample_meta and sample_meta.text_path:
+            try:
+                preview_text = Path(sample_meta.text_path).read_text(encoding='utf-8').strip()
+            except Exception:
+                preview_text = "Unable to load transcript for this sample."
+        if preview_text:
+            preview_text = preview_text.strip()
+        if len(preview_text) > 240:
+            preview_text = preview_text[:237] + "..."
+        zipvoice_prompt_preview_var.set(preview_text or "Select a sample to view its reference transcript.")
+
+    def handle_zipvoice_sample_change(event=None):
+        selected_display = zipvoice_sample_display_var.get()
+        selected_name = zipvoice_display_to_name.get(selected_display)
+        if selected_name:
+            zipvoice_sample_var.set(selected_name)
+        update_zipvoice_preview()
+
+    if zipvoice_samples:
+        zipvoice_sample_combo.bind("<<ComboboxSelected>>", handle_zipvoice_sample_change)
+
+    zipvoice_preview_frame = ttk.LabelFrame(tabs["🧬 ZipVoice TTS"], text="Prompt Transcript Preview", padding="10")
+    zipvoice_preview_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
+    zipvoice_preview_frame.columnconfigure(0, weight=1)
+    ttk.Label(zipvoice_preview_frame, textvariable=zipvoice_prompt_preview_var, wraplength=460, justify="left").grid(row=0, column=0, sticky="w", padx=5)
+
+    zipvoice_test_frame = ttk.LabelFrame(tabs["🧬 ZipVoice TTS"], text="Test ZipVoice Voice", padding="10")
+    zipvoice_test_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
+    zipvoice_test_frame.columnconfigure(0, weight=1)
+    zipvoice_test_text_var = tk.StringVar(window, value="This is a ZipVoice cloning test.")
+    ttk.Entry(zipvoice_test_frame, textvariable=zipvoice_test_text_var).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+
+    def run_zipvoice_test():
+        if not zipvoice_sample_var.get():
+            messagebox.showwarning("ZipVoice Samples", "No ZipVoice sample is selected. Add samples to test voice cloning.")
+            return
+        test_settings = dict(zipvoice_config)
+        test_settings.update({
+            'enabled': True,
+            'sample_name': zipvoice_sample_var.get(),
+            'model_name': zipvoice_model_var.get(),
+            'backend': zipvoice_backend_var.get(),
+            'speed': zipvoice_speed_var.get(),
+        })
+        test_zipvoice_voice(zipvoice_test_text_var.get(), test_settings, device_index=get_selected_device_index())
+
+    zipvoice_test_button = ttk.Button(
+        zipvoice_test_frame,
+        text="Test Voice",
+        command=run_zipvoice_test,
+        state="normal" if zipvoice_samples else "disabled"
+    )
+    zipvoice_test_button.grid(row=0, column=1, padx=5, pady=5)
+
+    update_zipvoice_preview()
+
     # --- Hardware Tab ---
     hardware_frame = ttk.LabelFrame(tabs["🛠️ Hardware"], text="Execution Providers", padding="10")
     hardware_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=5)
@@ -769,7 +899,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     tts_provider_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
     tts_provider_frame.columnconfigure(1, weight=1)
     ttk.Label(tts_provider_frame, text="Active TTS Provider:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
-    ttk.OptionMenu(tts_provider_frame, active_tts_provider_var, active_tts_provider_var.get(), "Windows SAPI", "OpenAI", "Kokoro TTS", "Piper TTS").grid(row=0, column=1, sticky="ew", padx=5)
+    ttk.OptionMenu(tts_provider_frame, active_tts_provider_var, active_tts_provider_var.get(), "Windows SAPI", "OpenAI", "Kokoro TTS", "Piper TTS", "ZipVoice TTS").grid(row=0, column=1, sticky="ew", padx=5)
 
     tts_behavior_frame = ttk.LabelFrame(audio_io_frame, text="TTS Behavior", padding="10")
     tts_behavior_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
@@ -1074,7 +1204,14 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['model'] = piper_model_file_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['voice'] = piper_voice_var.get()
         config.setdefault('tts_providers', {}).setdefault('Piper TTS', {})['length_scale'] = piper_length_scale_var.get()
-        
+
+        zipvoice_config_save = config.setdefault('tts_providers', {}).setdefault('ZipVoice TTS', {})
+        zipvoice_config_save['enabled'] = zipvoice_enabled_var.get()
+        zipvoice_config_save['sample_name'] = zipvoice_sample_var.get()
+        zipvoice_config_save['model_name'] = zipvoice_model_var.get()
+        zipvoice_config_save['backend'] = (zipvoice_backend_var.get() or 'torch').lower()
+        zipvoice_config_save['speed'] = float(zipvoice_speed_var.get())
+
         hardware_config_save = config.setdefault('hardware', {})
         hardware_config_save['kokoro_execution_provider'] = kokoro_execution_provider_var.get()
         hardware_config_save['piper_execution_provider'] = piper_execution_provider_var.get()

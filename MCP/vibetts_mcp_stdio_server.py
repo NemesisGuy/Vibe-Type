@@ -1,13 +1,15 @@
 import sys
 import os
 from typing import Any, Dict, List, Union
+import contextlib
 
 # Ensure project root is on sys.path for imports like `from core import tts`
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-print("--- STARTING VibeTTS MCP STDIO SERVER ---", flush=True)
+# Use stderr for any human-readable logs to avoid corrupting stdio protocol frames
+print("--- STARTING VibeTTS MCP STDIO SERVER ---", file=sys.stderr, flush=True)
 
 try:
     # FastMCP provides a concise way to define tools for the MCP protocol over stdio
@@ -18,13 +20,15 @@ except Exception as e:
         "ERROR: Python package 'mcp' is not installed.\n"
         "Install with your project interpreter: pip install mcp\n"
         f"Detailed import error: {e}",
+        file=sys.stderr,
         flush=True,
     )
     # Exit with non-zero so the IDE knows the server failed to start
     raise
 
-# Import TTS core after path fix
-from core import tts as core_tts  # noqa: E402
+# Import TTS core after path fix; guard stdout during import to keep stdio clean
+with contextlib.redirect_stdout(sys.stderr):
+    from core import tts as core_tts  # noqa: E402
 
 app = FastMCP("vibetts-mcp")
 
@@ -89,7 +93,6 @@ def phonemes(text: str, language: str = "Auto-Detect") -> Dict[str, Any]:
 
 if __name__ == "__main__":
     # Run with stdio transport so IDEs (JetBrains, etc.) can discover via mcp.json
-    print("VibeTTS MCP stdio server is starting...", flush=True)
+    print("VibeTTS MCP stdio server is starting...", file=sys.stderr, flush=True)
     app.run()
-    print("VibeTTS MCP stdio server stopped.", flush=True)
-
+    print("VibeTTS MCP stdio server stopped.", file=sys.stderr, flush=True)

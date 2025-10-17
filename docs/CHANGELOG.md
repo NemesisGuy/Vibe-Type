@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## 2025-10-17 — ZipVoice Voice Cloning Integration
+
+Summary:
+- **ZipVoice TTS Provider:** Added first-class support for the ZipVoice streaming pipeline, enabling quick voice cloning from prompt samples with native PyTorch GPU acceleration (with optional ONNX Runtime support).
+- **Settings UI:** Introduced a dedicated **🧬 ZipVoice TTS** tab with controls to enable the provider, choose bundled samples, adjust speed, and trigger one-click tests.
+- **Configuration Defaults:** Updated `config_manager` to seed new ZipVoice settings so the provider can be toggled without manual JSON edits.
+- **Documentation & Tests:** Refreshed README/FEATURES docs to describe the new provider and added unit coverage (`tests/test_zipvoice_manager.py`) for prompt discovery helpers.
+
+Key changes:
+- `core/zipvoice_manager.py`: New helper module for sample discovery, prompt resolution, and folder shortcuts.
+- `core/tts.py`: Integrated ZipVoice session management, playback logic with fallback audio buffering, and a test helper for the GUI.
+- `gui/settings_window.py`: Added the ZipVoice tab, sample preview UI, active provider dropdown update, and save/test wiring.
+- `tests/test_zipvoice_manager.py`: Validates bundled samples and prompt resolution behavior.
+- Documentation updates in `README.md` and `docs/FEATURES.md` to highlight the voice cloning workflow.
+
 ## 2025-10-09 — MCP Server Fixes and GUI Testing
 
 Summary:

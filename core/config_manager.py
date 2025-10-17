@@ -5,6 +5,8 @@ import collections.abc
 from core.encryption import encrypt, decrypt
 import copy
 
+from core.zipvoice_manager import DEFAULT_SAMPLE_NAME
+
 # Define which fields in the config should be encrypted.
 # The path is represented as a tuple of keys.
 SENSITIVE_FIELDS = {
@@ -76,7 +78,29 @@ def load_config():
             "Windows SAPI": {"enabled": True, "voice_index": 0, "rate": 175},
             "OpenAI": {"enabled": False, "api_key": "", "model": "tts-1", "voice": "alloy"},
             "Kokoro TTS": {"enabled": False, "model_file": "kokoro-v1.0.int8.onnx", "voice": "am_adam"},
-            "Piper TTS": {"enabled": False, "model": "en_US-lessac-medium.onnx"}
+            "Piper TTS": {"enabled": False, "model": "en_US-lessac-medium.onnx"},
+            "ZipVoice TTS": {
+                "enabled": False,
+                "backend": "torch",
+                "model_name": "zipvoice",
+                "sample_name": DEFAULT_SAMPLE_NAME,
+                "speed": 1.0,
+                "guidance_scale": None,
+                "num_step": None,
+                "target_rms": 0.1,
+                "t_shift": 1.0,
+                "remove_long_sil": False,
+                "custom_prompt_wav": "",
+                "custom_prompt_text_path": "",
+                "custom_prompt_text": "",
+                "model_dir": "",
+                "torch_checkpoint": "",
+                "torch_device": "",
+                "vocoder_device": "cpu",
+                "max_total_seconds": 25.0,
+                "num_thread": 6,
+                "onnx_int8": False
+            }
         },
 
         "active_prompt": "Assistant",

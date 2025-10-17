@@ -88,6 +88,15 @@ Choose the voice you want to hear for audio feedback. All local models should be
         *   Select the desired model file and voice from the settings window.
         *   **Hardware Acceleration:** You can select the execution provider (e.g., `CPU`, `CUDA`, `Tensorrt`) for Piper in the **Hardware** tab to leverage GPU acceleration for faster voice synthesis.
 
+*   **ZipVoice TTS (Local Voice Cloning):**
+  *   **Type:** Local (PyTorch GPU with optional ONNX Runtime)
+  *   **Default:** Disabled
+  *   **Description:** Streams high-quality cloned voices from short voice prompts. Runs on the native PyTorch checkpoint by default and uses CUDA when available, with optional ONNX Runtime support for environments that prefer exported models.
+  *   **Configuration:**
+    *   Open the **🧬 ZipVoice TTS** tab in settings, select a bundled prompt sample, or add your own audio/text pair under `zipvoice_tts/samples`.
+    *   Pick the backend (`onnx` for ONNX Runtime or `torch` for native PyTorch checkpoints) and model variant (`zipvoice` or `zipvoice_distill`).
+    *   Adjust the playback speed slider to fine-tune pacing and use the built-in test button to preview the cloned voice.
+
 *   **Kitten TTS (Coming Soon):**
     *   **Type:** Custom Local
     *   **Description:** An upcoming, high-performance TTS engine.

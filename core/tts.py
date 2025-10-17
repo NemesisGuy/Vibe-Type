@@ -17,6 +17,15 @@ import logging
 import re
 import queue
 import sounddevice as sd
+from typing import Tuple
+
+from zipvoice_tts import ZipVoiceStreamingSession
+
+from core.zipvoice_manager import (
+    ZipVoicePrompt,
+    list_builtin_samples,
+    resolve_prompt_from_config,
+)
 
 from core.config_manager import load_config, save_config
 from core.utils import get_resource_path
@@ -28,6 +37,10 @@ sapi_initialization_event = threading.Event()
 available_sapi_voices_cache = []
 kokoro_tts_instance = None
 piper_tts_instance = None
+zipvoice_tts_instance = None
+zipvoice_session_lock = threading.Lock()
+zipvoice_last_signature = None
+zipvoice_cached_prompt = None
 logger = logging.getLogger(__name__)
 
 # --- TTS Queue and Interrupt Handling ---
@@ -116,6 +129,249 @@ def _initialize_piper_tts():
         logger.error(f"FATAL: Could not initialize Piper TTS engine: {e}")
         piper_tts_instance = None
 
+
+def _zipvoice_signature(zipvoice_config: dict) -> tuple:
+    tracked_keys = (
+        'backend',
+        'model_name',
+        'sample_name',
+        'speed',
+        'guidance_scale',
+        'num_step',
+        'target_rms',
+        't_shift',
+        'remove_long_sil',
+        'custom_prompt_wav',
+        'custom_prompt_text_path',
+        'custom_prompt_text',
+        'model_dir',
+        'torch_checkpoint',
+        'torch_device',
+        'vocoder_device',
+        'max_total_seconds',
+        'num_thread',
+        'onnx_int8'
+    )
+    return tuple((key, zipvoice_config.get(key)) for key in tracked_keys)
+
+
+def _resolve_path_candidate(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = os.path.expanduser(str(value))
+    if not os.path.isabs(candidate):
+        candidate = get_resource_path(candidate)
+    return candidate
+
+
+def _build_zipvoice_session(zipvoice_config: dict) -> Tuple[ZipVoiceStreamingSession, ZipVoicePrompt]:
+    prompt = resolve_prompt_from_config(zipvoice_config)
+
+    backend = (zipvoice_config.get('backend') or 'onnx').strip().lower()
+    model_name = zipvoice_config.get('model_name', 'zipvoice') or 'zipvoice'
+
+    providers = None
+    if backend == 'onnx':
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    model_dir = _resolve_path_candidate(zipvoice_config.get('model_dir'))
+    torch_checkpoint = _resolve_path_candidate(zipvoice_config.get('torch_checkpoint'))
+
+    def _clean_float(key: str, default: float | None) -> float | None:
+        value = zipvoice_config.get(key)
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid ZipVoice setting '%s': %s. Using default %s.", key, value, default)
+            return default
+
+    def _clean_int(key: str, default: int | None) -> int | None:
+        value = zipvoice_config.get(key)
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid ZipVoice integer setting '%s': %s. Using default %s.", key, value, default)
+            return default
+
+    speed = _clean_float('speed', 1.0) or 1.0
+    target_rms = _clean_float('target_rms', 0.1) or 0.1
+    t_shift = _clean_float('t_shift', 1.0) or 1.0
+    guidance_scale = _clean_float('guidance_scale', None)
+    max_total_seconds = _clean_float('max_total_seconds', 25.0) or 25.0
+    num_step = _clean_int('num_step', None)
+    num_thread = _clean_int('num_thread', 6) or 6
+
+    remove_long_sil = bool(zipvoice_config.get('remove_long_sil', False))
+    onnx_int8 = bool(zipvoice_config.get('onnx_int8', False))
+
+    torch_device = zipvoice_config.get('torch_device') or None
+    if isinstance(torch_device, str):
+        torch_device = torch_device.strip() or None
+
+    vocoder_device = zipvoice_config.get('vocoder_device') or 'cpu'
+    if isinstance(vocoder_device, str):
+        vocoder_device = vocoder_device.strip() or 'cpu'
+
+    session = ZipVoiceStreamingSession(
+        model_name=model_name,
+        backend=backend,
+        providers=providers,
+        onnx_int8=onnx_int8,
+        model_dir=model_dir,
+        torch_checkpoint=torch_checkpoint,
+        torch_device=torch_device,
+        vocoder_device=vocoder_device,
+        speed=speed,
+        guidance_scale=guidance_scale,
+        num_step=num_step,
+        target_rms=target_rms,
+        t_shift=t_shift,
+        remove_long_sil=remove_long_sil,
+        max_total_seconds=max_total_seconds,
+        num_thread=num_thread,
+    )
+
+    session.prepare_prompt(prompt.wav_path, prompt.prompt_text)
+    return session, prompt
+
+
+def _initialize_zipvoice_tts(config: dict, force_rebuild: bool = False):
+    """Initialise (or reuse) the ZipVoice TTS session."""
+
+    global zipvoice_tts_instance, zipvoice_last_signature, zipvoice_cached_prompt
+
+    zipvoice_config = config.get('tts_providers', {}).get('ZipVoice TTS', {})
+    if not zipvoice_config.get('enabled'):
+        return None
+
+    signature = _zipvoice_signature(zipvoice_config)
+
+    with zipvoice_session_lock:
+        if (
+            not force_rebuild
+            and zipvoice_tts_instance is not None
+            and zipvoice_last_signature == signature
+        ):
+            return zipvoice_tts_instance
+
+        if zipvoice_tts_instance is not None:
+            try:
+                zipvoice_tts_instance.close()
+            except Exception:
+                logger.debug("Error closing previous ZipVoice session", exc_info=True)
+            zipvoice_tts_instance = None
+
+        try:
+            session, prompt = _build_zipvoice_session(zipvoice_config)
+        except Exception as exc:
+            message = str(exc)
+            if "Numpy is not available" in message or "NumPy" in message:
+                logger.error(
+                    "FATAL: Could not initialize ZipVoice TTS engine because NumPy/ONNX runtime are incompatible. "
+                    "Install `numpy<2` and reinstall matching torch/torchaudio/onnxruntime wheels, or upgrade those packages to builds compiled for NumPy 2.x."
+                )
+            else:
+                logger.error("FATAL: Could not initialize ZipVoice TTS engine: %s", exc)
+            zipvoice_last_signature = None
+            zipvoice_cached_prompt = None
+            return None
+
+        zipvoice_tts_instance = session
+        zipvoice_last_signature = signature
+        zipvoice_cached_prompt = prompt
+        logger.info(
+            "ZipVoice TTS ready with backend=%s, model=%s, sample=%s",
+            zipvoice_config.get('backend', 'onnx'),
+            zipvoice_config.get('model_name', 'zipvoice'),
+            zipvoice_config.get('sample_name'),
+        )
+        return zipvoice_tts_instance
+
+
+def _speak_zipvoice(text: str, config: dict, device_index: int = None, force_rebuild: bool = False):
+    session = _initialize_zipvoice_tts(config, force_rebuild=force_rebuild)
+    if not session:
+        logger.error("ZipVoice TTS is not initialized. Cannot speak.")
+        return
+
+    audio_queue: "queue.Queue[np.ndarray | None]" = queue.Queue()
+    audio_chunks: list[np.ndarray] = []
+    playback_error: dict[str, Exception | None] = {"exception": None}
+
+    def producer():
+        try:
+            for chunk in session.synthesize_text(text):
+                if tts_interrupt_event.is_set():
+                    break
+                chunk_audio = chunk.audio.cpu().numpy().astype(np.float32)
+                audio_chunks.append(chunk_audio)
+                audio_queue.put(chunk_audio)
+        except Exception as exc:
+            playback_error["exception"] = exc
+            logger.error("ZipVoice synthesis error: %s", exc)
+        finally:
+            audio_queue.put(None)
+
+    def consumer():
+        try:
+            stream_kwargs = {
+                "samplerate": session.sampling_rate,
+                "channels": 1,
+                "dtype": 'float32'
+            }
+            if device_index is not None:
+                stream_kwargs["device"] = device_index
+
+            with sd.OutputStream(**stream_kwargs) as stream:
+                while True:
+                    if tts_interrupt_event.is_set():
+                        break
+                    chunk_audio = audio_queue.get()
+                    if chunk_audio is None:
+                        break
+                    stream.write(chunk_audio)
+        except Exception as exc:
+            playback_error["exception"] = exc
+            logger.error("ZipVoice playback error: %s", exc)
+
+    producer_thread = threading.Thread(target=producer, daemon=True)
+    consumer_thread = threading.Thread(target=consumer, daemon=True)
+    producer_thread.start()
+    consumer_thread.start()
+    producer_thread.join()
+    consumer_thread.join()
+
+    if playback_error["exception"] and audio_chunks and not tts_interrupt_event.is_set():
+        logger.info("Falling back to buffered playback for ZipVoice audio.")
+        combined = np.concatenate(audio_chunks)
+        combined = np.clip(combined, -1.0, 1.0)
+        pcm16 = (combined * np.iinfo(np.int16).max).astype(np.int16)
+        _play_audio(pcm16.tobytes(), session.sampling_rate, 2)
+
+
+def test_zipvoice_voice(text: str, zipvoice_config: dict, device_index: int = None):
+    """Test the current ZipVoice settings using a temporary session."""
+
+    def task():
+        config = load_config()
+        config.setdefault('tts_providers', {}).setdefault('ZipVoice TTS', {}).update(zipvoice_config)
+        config['tts_providers']['ZipVoice TTS']['enabled'] = True
+        _speak_zipvoice(text, config, device_index=device_index, force_rebuild=True)
+
+    threading.Thread(target=task, daemon=True).start()
+
 def _sapi_worker():
     """A dedicated worker for caching SAPI voices."""
     global available_sapi_voices_cache
@@ -169,6 +425,12 @@ def get_voices_for_piper_model(model_file: str):
     except Exception as e:
         logger.error(f"Could not load voices for model {model_file}: {e}")
         return []
+
+
+def get_zipvoice_samples():
+    """Expose bundled ZipVoice samples for the settings UI."""
+
+    return list_builtin_samples()
 
 def get_output_devices():
     pa = pyaudio.PyAudio()
@@ -517,7 +779,8 @@ def _tts_worker():
                     'Windows SAPI': _speak_sapi,
                     'OpenAI': _speak_openai,
                     'Kokoro TTS': _speak_kokoro,
-                    'Piper TTS': _speak_piper
+                    'Piper TTS': _speak_piper,
+                    'ZipVoice TTS': _speak_zipvoice
                 }
 
                 speak_function = engine_map.get(provider)
