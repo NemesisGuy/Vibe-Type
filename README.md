@@ -29,6 +29,8 @@ VibeType is more than just a dictation tool. It's a suite of voice-powered utili
 
 A lightweight local MCP server provides simple HTTP endpoints to enqueue speech for sequential playback (no overlapping).
 
+**Note:** After updating to the latest MCP build you must press **Restart MCP** once in the settings window so the new HTTP server starts (it replaces the legacy stdio bridge).
+
 - Read: [docs/MCP.md](./docs/MCP.md)
 - Settings → 🛠️ MCP tab includes:
   - Start/Stop/Restart MCP

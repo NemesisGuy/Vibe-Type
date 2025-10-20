@@ -130,6 +130,11 @@ def load_config():
         "enable_text_injection": True,
         "language": "en", 
         "input_device_index": get_default_input_device_index(),
+        "input_device": {
+            "index": get_default_input_device_index(),
+            "loopback": False,
+            "channels": 1,
+        },
         "theme": "System",
         "whisper_model": "base",
         # New default API section so auto-start has predictable settings
@@ -156,6 +161,19 @@ def load_config():
         if isinstance(hotkey, str):
             config["hotkeys"][action] = [hotkey]
             
+    input_device_entry = config.get("input_device")
+    if not isinstance(input_device_entry, dict):
+        config["input_device"] = {
+            "index": config.get("input_device_index", 0),
+            "loopback": False,
+            "channels": 1,
+        }
+    else:
+        config["input_device"].setdefault("index", config.get("input_device_index", 0))
+        config["input_device"].setdefault("loopback", False)
+    config["input_device"].setdefault("channels", 1)
+    config["input_device"].setdefault("default_rate", 16000)
+
     return config
 
 def save_config(config):

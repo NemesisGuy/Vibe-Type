@@ -71,7 +71,7 @@ class KokoroTTS:
 
         try:
             if lang_code == 'j':
-                pipeline = ja.JAG2P()
+                pipeline = self._init_japanese_g2p()
             elif lang_code == 'z':
                 pipeline = zh.ZHG2P()
             else:
@@ -96,6 +96,23 @@ class KokoroTTS:
             logger.warning(f"G2P initialization returned None for lang_code '{lang_code}'")
 
         return pipeline
+
+    def _init_japanese_g2p(self):
+        """Initialise Japanese G2P with graceful fallback when cutlet/fugashi dictionaries are missing."""
+        last_error: Optional[Exception] = None
+        for variant in ("cutlet", "pyopenjtalk"):
+            try:
+                logger.info(f"Attempting Japanese G2P initialiser '{variant}'")
+                return ja.JAG2P(version=variant)
+            except Exception as exc:
+                last_error = exc
+                extra_hint = ""
+                if "no such file or directory" in str(exc).lower():
+                    extra_hint = " – try installing the unidic dictionary with `python -m unidic.download` or `pip install unidic-lite`"
+                logger.warning(f"Japanese G2P initialiser '{variant}' failed: {exc}{extra_hint}")
+        if last_error:
+            logger.error(f"All Japanese G2P fallbacks failed: {last_error}")
+        return None
 
     def download_models(self) -> None:
         self.model_dir.mkdir(parents=True, exist_ok=True)

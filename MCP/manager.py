@@ -36,11 +36,11 @@ class MCPManager:
         # Ensure PYTHONPATH includes project root for local imports
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
-        # Align MCP with API host/port from config
+        # Align MCP HTTP server with configured host/port
         cfg = load_config()
-        api_cfg = cfg.get('api', {})
-        env['VIBETYPE_API_HOST'] = str(api_cfg.get('host', '127.0.0.1'))
-        env['VIBETYPE_API_PORT'] = str(api_cfg.get('port', 9031))
+        mcp_cfg = cfg.get('mcp', {})
+        env['VIBETYPE_API_HOST'] = str(mcp_cfg.get('host', '127.0.0.1'))
+        env['VIBETYPE_API_PORT'] = str(mcp_cfg.get('port', 9032))
         # Use vibetts_mcp_server.py to avoid import collision with the 'mcp' package
         server_script = os.path.join("MCP", "vibetts_mcp_server.py")
         self.proc = subprocess.Popen(

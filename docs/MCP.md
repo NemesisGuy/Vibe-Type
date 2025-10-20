@@ -1,6 +1,6 @@
 # VibeType MCP Server
 
-This lightweight HTTP server lets you drive local speech via simple endpoints and see live logs in the MCP tab.
+This lightweight HTTP server lets you drive local speech via simple endpoints and see live logs in the MCP tab. Restart the MCP from the settings UI after pulling updates so the new server process is relaunched. JSON-RPC (Model Context Protocol) clients should target the `/mcp` path.
 
 Endpoints
 - GET /health
@@ -28,15 +28,14 @@ GUI integration (Settings → 🛠️ MCP)
 - Auto-start MCP on launch setting
 
 Quick tests (Windows cmd.exe)
-```bat
-cd /d C:\Users\Reign\Documents\Python Projects\VibeType
+# Manual quick-start check (optional)
+```powershell
+cd "C:\Users\Reign\Documents\Python Projects\VibeType"
 python MCP\vibetts_mcp_server.py
 ```
-In a second terminal:
-```bat
-curl http://127.0.0.1:9032/health
-curl -s -X POST http://127.0.0.1:9032/speak -H "Content-Type: application/json" -d "{\"text\":\"Hello from MCP\"}"
-curl -s -X POST http://127.0.0.1:9032/speak_batch -H "Content-Type: application/json" -d "{\"texts\":[\"one\",\"two\",\"three\"]}"
+In another terminal run a health check:
+```powershell
+curl.exe http://127.0.0.1:9032/health
 ```
 
 PowerShell examples (recommended on Windows)
@@ -51,13 +50,6 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:9032/speak' -Method POST -ContentType '
 
 # Speak batch sequentially
 Invoke-RestMethod -Uri 'http://127.0.0.1:9032/speak_batch' -Method POST -ContentType 'application/json' -Body '{ "texts": ["one", "two", "three"] }'
-```
-
-Alternative: Force real curl on Windows
-```powershell
-curl.exe http://127.0.0.1:9032/health
-curl.exe -s -X POST http://127.0.0.1:9032/speak -H "Content-Type: application/json" -d '{"text":"Hello from MCP"}'
-curl.exe -s -X POST http://127.0.0.1:9032/speak_batch -H "Content-Type: application/json" -d '{"texts":["one","two","three"]}'
 ```
 
 Notes

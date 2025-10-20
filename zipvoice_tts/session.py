@@ -23,11 +23,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hashlib
 import importlib
+import json
 import logging
+import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 
 import safetensors.torch
 import torch
@@ -35,6 +39,17 @@ from torch import Tensor
 import numpy as np
 
 from huggingface_hub import hf_hub_download
+
+try:
+    from lhotse.utils import fix_random_seed
+except Exception:  # pragma: no cover - optional dependency
+    def fix_random_seed(seed: int) -> None:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+PROMPT_CACHE_VERSION = 1
+VOICE_PROFILE_VERSION = 1
 
 from .vendor import ensure_vendor_zipvoice
 
@@ -120,6 +135,7 @@ class ZipVoiceStreamingSession:
         prompt_trim_edge_silence: bool = True,
         max_total_seconds: float = 25.0,
         num_thread: int = 6,
+        seed: Optional[int] = None,
     ) -> None:
         # Collect runtime configuration in an attribute-friendly mapping.
         self.params = AttributeDict()
@@ -176,6 +192,7 @@ class ZipVoiceStreamingSession:
         self.params.prompt_trim_edge_silence = prompt_trim_edge_silence
         self.params.max_total_seconds = max_total_seconds
         self.params.num_thread = num_thread
+        self.params.seed = int(seed) if isinstance(seed, int) else None
 
         defaults = MODEL_DEFAULTS.get(model_name, {})
         self.params.num_step = num_step or defaults.get("num_step") or 16
@@ -213,6 +230,8 @@ class ZipVoiceStreamingSession:
         self.tokenizer = self._build_tokenizer(token_file)
         self.model_config = self._load_config(self.model_config_path)
         self.sampling_rate = self.model_config["feature"]["sampling_rate"]
+        self._model_config_stamp = self._build_path_stamp(self.model_config_path)
+        self._prompt_cache_root = self._initialise_prompt_cache_dir()
         if self.params.backend == "onnx":
             assert self.text_encoder_path is not None
             assert self.fm_decoder_path is not None
@@ -261,6 +280,7 @@ class ZipVoiceStreamingSession:
         self.prompt_rms: Optional[float] = None
         self.prompt_text: Optional[str] = None
         self.prompt_duration: Optional[float] = None
+        self._seed_counter: int = 0
 
         self._text_queue: Optional[asyncio.Queue[str]] = None
 
@@ -428,16 +448,168 @@ class ZipVoiceStreamingSession:
         raise ValueError(f"Unknown tokenizer type: {tok}")
 
     def _load_config(self, config_path: Path):
-        import json
-
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
+
+    def _apply_prompt_cache(self, cache: Dict[str, Any]) -> None:
+        prompt_features = cache["prompt_features"]
+        if not isinstance(prompt_features, torch.Tensor):
+            prompt_features = torch.tensor(prompt_features, dtype=torch.float32)
+        else:
+            prompt_features = prompt_features.detach().clone().to(dtype=torch.float32)
+        self.prompt_features = prompt_features
+        self.prompt_tokens = cache["prompt_tokens"]
+        self.prompt_tokens_str = cache["prompt_tokens_str"]
+        self.prompt_rms = float(cache["prompt_rms"])
+        self.prompt_text = cache["prompt_text"]
+        self.prompt_duration = float(cache["prompt_duration"])
+        self._reset_seed_counter()
+
+    def _current_prompt_cache_params(self) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "model_name": self.params.model_name,
+            "backend": self.params.backend,
+            "onnx_int8": bool(self.params.onnx_int8),
+            "feat_scale": float(self.params.feat_scale),
+            "tokenizer": self.params.tokenizer,
+            "sampling_rate": int(self.sampling_rate),
+        }
+        if self.params.model_dir is not None:
+            params["model_dir_stamp"] = self._build_path_stamp(self.params.model_dir)
+        return params
+
+    def _initialise_prompt_cache_dir(self) -> Optional[Path]:
+        cache_root = Path(os.path.expanduser("~")) / ".VibeType" / "cache" / "zipvoice_prompts"
+        try:
+            cache_root.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # pragma: no cover - cache failures are non-fatal
+            logger.debug("ZipVoice prompt cache disabled; could not create %s: %s", cache_root, exc)
+            return None
+        return cache_root
+
+    @staticmethod
+    def _build_path_stamp(path: Optional[Path]) -> str:
+        if path is None:
+            return ""
+        resolved = Path(path).resolve()
+        try:
+            stat = resolved.stat()
+            mtime = getattr(stat, "st_mtime_ns", None)
+            if mtime is None:
+                mtime = int(stat.st_mtime * 1_000_000_000)
+            return f"{resolved}|{mtime}|{stat.st_size}"
+        except OSError:
+            return str(resolved)
+
+    def _reset_seed_counter(self) -> None:
+        self._seed_counter = 0
+
+    def _apply_inference_seed(self, offset: int) -> None:
+        base_seed = self.params.seed
+        if base_seed is None:
+            return
+        seed_value = int(base_seed + offset) & 0xFFFFFFFF
+        fix_random_seed(seed_value)
+        random.seed(seed_value)
+        np.random.seed(seed_value)
+
+    @staticmethod
+    def _prompt_text_hash(prompt_text: str) -> str:
+        return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+
+    def _make_prompt_cache_key(self, prompt_wav: str, prompt_text: str) -> Tuple[str, Dict[str, Any]]:
+        wav_path = Path(prompt_wav)
+        wav_signature = self._build_path_stamp(wav_path)
+        params = self._current_prompt_cache_params()
+        descriptor = {
+            "version": PROMPT_CACHE_VERSION,
+            "wav_signature": wav_signature,
+            "prompt_text_hash": self._prompt_text_hash(prompt_text),
+            "model_stamp": self._model_config_stamp,
+            "params": params,
+        }
+        payload = json.dumps(descriptor, sort_keys=True).encode("utf-8")
+        cache_key = hashlib.sha256(payload).hexdigest()
+        return cache_key, descriptor
+
+    def _load_prompt_cache(self, cache_path: Path, descriptor: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not cache_path.is_file():
+            return None
+        try:
+            data = torch.load(cache_path, map_location="cpu")
+        except Exception as exc:  # pragma: no cover - cache is optional
+            logger.debug("Failed to read ZipVoice prompt cache %s: %s", cache_path, exc)
+            return None
+
+        if not isinstance(data, dict):
+            return None
+        if data.get("version") != PROMPT_CACHE_VERSION:
+            return None
+        if data.get("model_stamp") != self._model_config_stamp:
+            return None
+        if data.get("wav_signature") != descriptor.get("wav_signature"):
+            return None
+        if data.get("prompt_text_hash") != descriptor.get("prompt_text_hash"):
+            return None
+
+        params = data.get("params")
+        if not isinstance(params, dict):
+            return None
+        if params != self._current_prompt_cache_params():
+            return None
+
+        required_keys = {
+            "prompt_features",
+            "prompt_tokens",
+            "prompt_tokens_str",
+            "prompt_rms",
+            "prompt_text",
+            "prompt_duration",
+        }
+        if not required_keys.issubset(data.keys()):
+            return None
+
+        return data
+
+    def _save_prompt_cache(self, cache_path: Path, payload: Dict[str, Any]) -> None:
+        tmp_path = cache_path.with_suffix(".tmp")
+        try:
+            torch.save(payload, tmp_path)
+            tmp_path.replace(cache_path)
+            logger.debug("Saved ZipVoice prompt cache %s", cache_path.name)
+        except Exception as exc:  # pragma: no cover - cache writes are best-effort
+            logger.debug("Failed to write ZipVoice prompt cache %s: %s", cache_path, exc)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     # Prompt preparation
     # ------------------------------------------------------------------
     def prepare_prompt(self, prompt_wav: str, prompt_text: str) -> None:
         """Load and cache prompt features for subsequent streaming."""
+
+        prompt_text = add_punctuation(prompt_text)
+
+        cache_path: Optional[Path] = None
+        cache_descriptor: Optional[Dict[str, Any]] = None
+        if self._prompt_cache_root is not None:
+            try:
+                cache_key, cache_descriptor = self._make_prompt_cache_key(prompt_wav, prompt_text)
+                cache_path = self._prompt_cache_root / f"{cache_key}.pt"
+                cached = self._load_prompt_cache(cache_path, cache_descriptor)
+                if cached:
+                    self._apply_prompt_cache(cached)
+                    logger.info(
+                        "Loaded cached ZipVoice prompt embedding (%s)", cache_path.name
+                    )
+                    return
+            except Exception as exc:  # pragma: no cover - cache failures are non-fatal
+                logger.debug("ZipVoice prompt cache unavailable: %s", exc, exc_info=True)
+                cache_path = None
+                cache_descriptor = None
 
         wav = load_prompt_wav(prompt_wav, sampling_rate=self.sampling_rate)
         if self.params.prompt_trim_edge_silence:
@@ -460,7 +632,6 @@ class ZipVoiceStreamingSession:
         features = self.feature_extractor.extract(wav, sampling_rate=self.sampling_rate)
         features = features.unsqueeze(0) * self.params.feat_scale
 
-        prompt_text = add_punctuation(prompt_text)
         prompt_tokens = self.tokenizer.texts_to_tokens([prompt_text])[0]
         prompt_token_ids = self.tokenizer.tokens_to_token_ids([prompt_tokens])
 
@@ -470,6 +641,108 @@ class ZipVoiceStreamingSession:
         self.prompt_rms = float(prompt_rms)
         self.prompt_text = prompt_text
         self.prompt_duration = prompt_duration
+        self._reset_seed_counter()
+
+        if cache_path and cache_descriptor:
+            payload = {
+                "version": PROMPT_CACHE_VERSION,
+                "model_stamp": self._model_config_stamp,
+                "params": self._current_prompt_cache_params(),
+                "prompt_text_hash": cache_descriptor["prompt_text_hash"],
+                "prompt_text": prompt_text,
+                "prompt_features": self.prompt_features.detach().cpu(),
+                "prompt_tokens": self.prompt_tokens,
+                "prompt_tokens_str": self.prompt_tokens_str,
+                "prompt_rms": self.prompt_rms,
+                "prompt_duration": self.prompt_duration,
+                "wav_signature": cache_descriptor["wav_signature"],
+            }
+            self._save_prompt_cache(cache_path, payload)
+
+    # ------------------------------------------------------------------
+    # Voice profile persistence
+    # ------------------------------------------------------------------
+    def export_prompt_profile(
+        self,
+        destination: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+        overwrite: bool = True,
+    ) -> Path:
+        """Persist the currently prepared prompt as a reusable voice profile."""
+
+        self._ensure_prompt_ready()
+
+        dest_path = Path(destination)
+        if dest_path.exists() and not overwrite:
+            raise FileExistsError(f"Profile already exists: {dest_path}")
+        if dest_path.suffix.lower() != ".pt":
+            dest_path = dest_path.with_suffix(".pt")
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        payload: Dict[str, Any] = {
+            "profile_version": VOICE_PROFILE_VERSION,
+            "model_stamp": self._model_config_stamp,
+            "params": self._current_prompt_cache_params(),
+            "prompt_text": self.prompt_text,
+            "prompt_features": self.prompt_features.detach().cpu(),
+            "prompt_tokens": self.prompt_tokens,
+            "prompt_tokens_str": self.prompt_tokens_str,
+            "prompt_rms": self.prompt_rms,
+            "prompt_duration": self.prompt_duration,
+            "metadata": metadata or {},
+        }
+
+        tmp_path = dest_path.with_suffix(".tmp")
+        torch.save(payload, tmp_path)
+        tmp_path.replace(dest_path)
+        logger.info("Saved ZipVoice voice profile -> %s", dest_path)
+        return dest_path
+
+    def load_prompt_profile(self, profile: Union[str, Path]) -> Dict[str, Any]:
+        """Load a previously exported voice profile and activate it."""
+
+        profile_path = Path(profile)
+        if not profile_path.is_file():
+            raise FileNotFoundError(f"Voice profile not found: {profile_path}")
+
+        data = torch.load(profile_path, map_location="cpu")
+        if not isinstance(data, dict):
+            raise ValueError(f"Invalid ZipVoice profile format: {profile_path}")
+
+        version = data.get("profile_version")
+        if version != VOICE_PROFILE_VERSION:
+            raise ValueError(
+                f"Profile {profile_path} has version {version}; expected {VOICE_PROFILE_VERSION}."
+            )
+
+        if data.get("model_stamp") != self._model_config_stamp:
+            raise ValueError(
+                "Voice profile was created with a different ZipVoice model configuration. "
+                "Recreate the profile using the current model weights."
+            )
+
+        params = data.get("params")
+        if params != self._current_prompt_cache_params():
+            raise ValueError(
+                "Voice profile parameters do not match current session settings (backend/providers)."
+            )
+
+        required = {
+            "prompt_features",
+            "prompt_tokens",
+            "prompt_tokens_str",
+            "prompt_rms",
+            "prompt_duration",
+            "prompt_text",
+        }
+        missing = [key for key in required if key not in data]
+        if missing:
+            raise ValueError(f"Voice profile missing required fields: {missing}")
+
+        self._apply_prompt_cache(data)
+        logger.info("Loaded ZipVoice voice profile <- %s", profile_path)
+        metadata = data.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
 
     # ------------------------------------------------------------------
     # Core streaming helpers
@@ -565,6 +838,8 @@ class ZipVoiceStreamingSession:
     def synthesize_text(self, text: str) -> Iterator[AudioChunk]:
         """Generate audio chunks for the provided text."""
         self._ensure_prompt_ready()
+        self._reset_seed_counter()
+        self._apply_inference_seed(0)
         start_t = dt.datetime.now()
 
         token_chunks_str = self._chunk_text(text)

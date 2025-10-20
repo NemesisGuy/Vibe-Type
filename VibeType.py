@@ -1,11 +1,13 @@
 # vibe_type.py
 
+import logging
 import tkinter as tk
 import gui.theme_manager
 from gui.tray_app import TrayApplication
 from core import hotkey_handler
 import subprocess
 from core.config_manager import load_config
+from core.logging_utils import configure_logging
 import os
 import sys
 import threading
@@ -89,6 +91,12 @@ def maybe_start_api_server():
 
 def main():
     """Main function to start VibeType with the correct, stable initialization order."""
+    log_file_path = configure_logging()
+    logger = logging.getLogger(__name__)
+    if log_file_path:
+        logger.info("Logging to %s", log_file_path)
+    else:
+        logger.warning("File logging unavailable; falling back to console-only logging.")
     print("Starting VibeType...")
 
     # Auto-start API server if enabled in config

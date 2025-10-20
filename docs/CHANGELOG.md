@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here.
 
+## 2025-10-21 — ZipVoice voice profile export (experimental)
+
+Summary:
+- Added persistent ZipVoice voice profiles that store the prepared prompt embedding, tokens, RMS, and runtime parameters in a single `.pt` file.
+- `ZipVoiceStreamingSession` now exposes `export_prompt_profile()` / `load_prompt_profile()` helpers so advanced users can save a warmed prompt and reload it instantly.
+- The ZipVoice manager gained helper APIs (`save_voice_profile`, `list_saved_profiles`, `profile_path_for_name`) plus config support for `custom_prompt_profile`, and the TTS bootstrapper will reload sessions from these profiles when configured.
+- The settings UI now offers a prompt source toggle (WAV sample vs. saved embedding), conversion workflow, and saved profile picker so non-technical users can reuse embeddings without touching JSON.
+- Saved profiles now include a `_base` or `_distilled` suffix based on the originating model, and the settings UI only shows embeddings compatible with the currently selected model variant to prevent mismatches.
+
+Known limitations:
+- Profiles are tied to the ZipVoice model/config stamp; regenerate them if you swap checkpoints or backends.
+
+## 2025-10-19 — ZipVoice prompt caching (experimental)
+
+Summary:
+- Introduced an on-disk cache for ZipVoice prompt embeddings to cut the ~7s warm-up before first speech.
+- Cached tensors live under `%USERPROFILE%\.VibeType\cache\zipvoice_prompts` and are keyed by prompt wav/text plus model parameters.
+- `ZipVoiceStreamingSession.prepare_prompt` now loads cached features if present and only falls back to recomputing when the cache miss occurs or becomes invalid.
+
+Known limitations:
+- Cache writes are best-effort; if the directory is inaccessible the pipeline silently reverts to the previous behavior.
+- Needs a full regression run across multiple prompt voices before removing the “experimental” tag.
+
 ## 2025-10-17 — ZipVoice Voice Cloning Integration
 
 Summary:

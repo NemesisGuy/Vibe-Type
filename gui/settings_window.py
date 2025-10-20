@@ -6,7 +6,13 @@ import webbrowser
 import os
 import json
 import requests
+import re
+import shutil
+import threading
+import copy
+import datetime as dt
 from pathlib import Path
+from typing import Any, Dict
 
 # Import from core
 from core.config_manager import load_config, save_config
@@ -26,7 +32,7 @@ from core.tts import (
     open_benchmark_folder, get_kokoro_models, trigger_kokoro_benchmark,
     test_kokoro_voice, get_piper_model_files, get_voices_for_piper_model,
     test_sapi_voice, test_piper_voice, test_openai_voice, get_kokoro_languages,
-    test_zipvoice_voice, get_zipvoice_samples
+    test_zipvoice_voice, get_zipvoice_samples, export_zipvoice_profile
 )
 from core.ai import test_ollama_connection, send_webhook_test, get_ai_response, get_ollama_models
 from core.model_manager import delete_piper_model, import_piper_models
@@ -34,7 +40,22 @@ from core.transcript_saver import clear_transcript_history, open_transcript_hist
 from core.analytics import load_analytics_data, reset_analytics_data
 from core.performance_monitor import get_performance_metrics
 from core.api_manager import start_api_server, stop_api_server, restart_api_server, is_api_running
-from core.zipvoice_manager import open_zipvoice_samples_folder
+from core.audio_capture import (
+    start_capture as start_audio_capture,
+    stop_capture as stop_audio_capture,
+    get_input_devices,
+)
+from core.transcription import transcribe_audio
+from core.zipvoice_manager import (
+    blend_voice_profiles,
+    open_zipvoice_samples_folder,
+    ensure_samples_directory,
+    ensure_profiles_directory,
+    list_saved_profiles,
+    open_zipvoice_profiles_folder,
+    profile_path_for_name,
+    delete_voice_profile,
+)
 
 def create_settings_window(parent: tk.Tk, on_save_callback=None):
     config = load_config()
@@ -97,11 +118,13 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
 
     # --- Data and Maps ---
     output_devices = get_output_devices()
+    input_devices = get_input_devices()
     sapi_voices = get_available_sapi_voices()
     sapi_voice_map = {desc: index for desc, index in sapi_voices}
     sapi_index_map = {index: desc for desc, index in sapi_voices}
     output_device_map = {name: index for name, index in output_devices.items()}
     output_index_map = {index: name for name, index in output_devices.items()}
+    input_device_map = {name: info for name, info in input_devices.items()}
 
     # --- Helper Functions (defined early to avoid NameError) ---
     def get_selected_device_index():
@@ -190,6 +213,29 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     zipvoice_backend_var = tk.StringVar(window, value=(zipvoice_config.get('backend') or 'torch').lower())
     zipvoice_speed_var = tk.DoubleVar(window, value=zipvoice_speed_value)
     zipvoice_prompt_preview_var = tk.StringVar(window, value="")
+    zipvoice_prompt_mode_default = zipvoice_config.get('prompt_mode', 'sample') or 'sample'
+    if zipvoice_prompt_mode_default not in {"sample", "profile"}:
+        zipvoice_prompt_mode_default = "sample"
+    zipvoice_prompt_mode_var = tk.StringVar(window, value=zipvoice_prompt_mode_default)
+    seed_config_value = zipvoice_config.get('seed')
+    if isinstance(seed_config_value, int):
+        seed_default = str(seed_config_value)
+    else:
+        seed_default = str(seed_config_value).strip() if isinstance(seed_config_value, str) else ""
+    zipvoice_seed_var = tk.StringVar(window, value=seed_default)
+    selected_profile_path = zipvoice_config.get('custom_prompt_profile', '') or ''
+    inferred_profile_name = zipvoice_config.get('profile_name') or (Path(selected_profile_path).stem if selected_profile_path else "")
+    zipvoice_profile_selection_var = tk.StringVar(window, value=inferred_profile_name)
+    zipvoice_selected_profile_path_var = tk.StringVar(window, value=selected_profile_path)
+    default_profile_name = inferred_profile_name or (default_zipvoice_sample or "my_voice")
+    zipvoice_profile_name_var = tk.StringVar(window, value=default_profile_name)
+    zipvoice_profile_status_var = tk.StringVar(window, value="")
+    zipvoice_profiles_map: Dict[str, Dict[str, Any]] = {}
+    zipvoice_blend_primary_var = tk.StringVar(window, value="")
+    zipvoice_blend_secondary_var = tk.StringVar(window, value="")
+    zipvoice_blend_weight_var = tk.DoubleVar(window, value=0.5)
+    zipvoice_blend_name_var = tk.StringVar(window, value="blend_candidate")
+    zipvoice_blend_status_var = tk.StringVar(window, value="")
 
     hardware_config = config.get('hardware', {})
     kokoro_execution_provider_var = tk.StringVar(window, value=hardware_config.get('kokoro_execution_provider', 'CPU'))
@@ -198,8 +244,30 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
 
     audio_config = config.get('audio', {})
     initial_output_device_desc = output_index_map.get(audio_config.get('output_device_index'))
+
+    stored_input_device = config.get('input_device')
+    if not isinstance(stored_input_device, dict):
+        stored_input_device = {
+            'index': config.get('input_device_index', 0),
+            'loopback': False,
+        }
+
+    def _matches_device(info: dict, stored: dict) -> bool:
+        return (
+            int(info.get('index', -1)) == int(stored.get('index', -1))
+            and bool(info.get('loopback', False)) == bool(stored.get('loopback', False))
+        )
+
+    initial_input_device_desc = None
+    for device_label, info in input_device_map.items():
+        if _matches_device(info, stored_input_device):
+            initial_input_device_desc = device_label
+            break
+    if initial_input_device_desc is None and input_device_map:
+        initial_input_device_desc = next(iter(input_device_map.keys()))
     speaker_desc_var = tk.StringVar(window, value=initial_output_device_desc)
     speak_transcription_var = tk.BooleanVar(window, value=audio_config.get('speak_transcription_result', True))
+    zipvoice_input_device_var = tk.StringVar(window, value=initial_input_device_desc)
 
     history_config = config.get('history', {})
     transcript_limit_var = tk.IntVar(window, value=history_config.get('transcript_limit', 100))
@@ -222,7 +290,7 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     notebook.pack(expand=True, fill="both")
 
     # --- Tabs ---
-    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🧬 ZipVoice TTS", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API", "🛠️ MCP"]}
+    tabs = {name: ttk.Frame(notebook, padding="10") for name in ["⚙️ General", "⌨️ Hotkeys", "🤖 AI", "🎤 Audio I/O", "🔊 Windows SAPI", "🤖 OpenAI TTS", "❤️ Kokoro TTS", "🐍 Piper TTS", "🧬 ZipVoice TTS", "🎙️ ZipVoice Samples", "🛠️ Hardware", "📦 Models", "🔐 Security & Privacy", "📊 Analytics", "🌐 API", "🛠️ MCP"]}
     for name, tab_frame in tabs.items():
         notebook.add(tab_frame, text=name)
 
@@ -788,22 +856,236 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         "onnx",
     ).grid(row=2, column=1, sticky="ew", padx=5)
 
-    ttk.Label(zipvoice_main_frame, text="Sample Voice Prompt:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+    ttk.Label(zipvoice_main_frame, text="Prompt Source:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_mode_frame = ttk.Frame(zipvoice_main_frame)
+    zipvoice_mode_frame.grid(row=3, column=1, columnspan=2, sticky="w", padx=5, pady=2)
+    zipvoice_sample_radio = ttk.Radiobutton(
+        zipvoice_mode_frame,
+        text="WAV / Sample",
+        variable=zipvoice_prompt_mode_var,
+        value="sample",
+    )
+    zipvoice_sample_radio.pack(side="left", padx=(0, 8))
+    zipvoice_profile_radio = ttk.Radiobutton(
+        zipvoice_mode_frame,
+        text="Saved Embedding",
+        variable=zipvoice_prompt_mode_var,
+        value="profile",
+    )
+    zipvoice_profile_radio.pack(side="left")
+
+    zipvoice_sample_source_frame = ttk.Frame(zipvoice_main_frame)
+    zipvoice_sample_source_frame.grid(row=4, column=0, columnspan=3, sticky="ew", padx=0, pady=2)
+    zipvoice_sample_source_frame.columnconfigure(1, weight=1)
     sample_display_values = [sample.display_name for sample in zipvoice_samples] if zipvoice_samples else ["No samples available"]
+    ttk.Label(zipvoice_sample_source_frame, text="Sample Voice Prompt:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
     zipvoice_sample_combo = ttk.Combobox(
-        zipvoice_main_frame,
+        zipvoice_sample_source_frame,
         textvariable=zipvoice_sample_display_var,
         values=sample_display_values,
         state="readonly" if zipvoice_samples else "disabled"
     )
-    zipvoice_sample_combo.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
-    ttk.Button(zipvoice_main_frame, text="📁 Open Samples Folder", command=open_zipvoice_samples_folder).grid(row=3, column=2, padx=5, pady=2)
+    zipvoice_sample_combo.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+    ttk.Button(zipvoice_sample_source_frame, text="📁", width=4, command=open_zipvoice_samples_folder).grid(row=0, column=2, padx=5, pady=2)
 
-    ttk.Label(zipvoice_main_frame, text="Speed Multiplier:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
+    ttk.Label(zipvoice_sample_source_frame, text="Save as Embedding:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_profile_name_entry = ttk.Entry(zipvoice_sample_source_frame, textvariable=zipvoice_profile_name_var)
+    zipvoice_profile_name_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
+    zipvoice_convert_button = ttk.Button(zipvoice_sample_source_frame, text="Convert & Save")
+    zipvoice_convert_button.grid(row=1, column=2, padx=5, pady=2)
+    ttk.Label(zipvoice_sample_source_frame, textvariable=zipvoice_profile_status_var, foreground="green").grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=2)
+
+    zipvoice_profile_source_frame = ttk.Frame(zipvoice_main_frame)
+    zipvoice_profile_source_frame.grid(row=4, column=0, columnspan=3, sticky="ew", padx=0, pady=2)
+    zipvoice_profile_source_frame.columnconfigure(1, weight=1)
+    ttk.Label(zipvoice_profile_source_frame, text="Saved Embedding:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_profile_combo = ttk.Combobox(
+        zipvoice_profile_source_frame,
+        textvariable=zipvoice_profile_selection_var,
+        values=[],
+        state="disabled"
+    )
+    zipvoice_profile_combo.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+    profile_button_group = ttk.Frame(zipvoice_profile_source_frame)
+    profile_button_group.grid(row=0, column=2, sticky="e", padx=5, pady=2)
+    zipvoice_profile_refresh_button = ttk.Button(profile_button_group, text="🔄", width=3)
+    zipvoice_profile_refresh_button.pack(side="left", padx=(0, 4))
+    ttk.Button(profile_button_group, text="📁", width=3, command=open_zipvoice_profiles_folder).pack(side="left", padx=(0, 4))
+    zipvoice_profile_delete_button = ttk.Button(profile_button_group, text="🗑", width=3)
+    zipvoice_profile_delete_button.pack(side="left")
+
+    ttk.Label(zipvoice_main_frame, text="Speed Multiplier:").grid(row=5, column=0, sticky="w", padx=5, pady=2)
     zipvoice_speed_scale = ttk.Scale(zipvoice_main_frame, from_=0.6, to=1.4, orient='horizontal', variable=zipvoice_speed_var)
-    zipvoice_speed_scale.grid(row=4, column=1, sticky="ew", padx=5)
+    zipvoice_speed_scale.grid(row=5, column=1, sticky="ew", padx=5)
     zipvoice_speed_value_label = ttk.Label(zipvoice_main_frame, text=f"{zipvoice_speed_var.get():.2f}")
-    zipvoice_speed_value_label.grid(row=4, column=2, padx=5)
+    zipvoice_speed_value_label.grid(row=5, column=2, padx=5)
+
+    ttk.Label(zipvoice_main_frame, text="Deterministic Seed (optional):").grid(row=6, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_seed_entry = ttk.Entry(zipvoice_main_frame, textvariable=zipvoice_seed_var)
+    zipvoice_seed_entry.grid(row=6, column=1, sticky="ew", padx=5, pady=2)
+    ttk.Label(zipvoice_main_frame, text="Use blank for random each run").grid(row=6, column=2, sticky="w", padx=5, pady=2)
+
+    zipvoice_blend_frame = ttk.LabelFrame(zipvoice_main_frame, text="Blend Saved Embeddings", padding="10")
+    zipvoice_blend_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=5)
+    zipvoice_blend_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(zipvoice_blend_frame, text="Primary Profile:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_blend_primary_combo = ttk.Combobox(
+        zipvoice_blend_frame,
+        textvariable=zipvoice_blend_primary_var,
+        values=[],
+        state="disabled",
+    )
+    zipvoice_blend_primary_combo.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+
+    ttk.Label(zipvoice_blend_frame, text="Secondary Profile:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_blend_secondary_combo = ttk.Combobox(
+        zipvoice_blend_frame,
+        textvariable=zipvoice_blend_secondary_var,
+        values=[],
+        state="disabled",
+    )
+    zipvoice_blend_secondary_combo.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
+
+    ttk.Label(zipvoice_blend_frame, text="Primary Weight:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_blend_weight_scale = ttk.Scale(
+        zipvoice_blend_frame,
+        from_=0.0,
+        to=1.0,
+        orient="horizontal",
+        variable=zipvoice_blend_weight_var,
+    )
+    zipvoice_blend_weight_scale.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
+    zipvoice_blend_weight_label = ttk.Label(zipvoice_blend_frame, text="")
+    zipvoice_blend_weight_label.grid(row=2, column=2, sticky="w", padx=5)
+
+    ttk.Label(zipvoice_blend_frame, text="Blended Name:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_blend_name_entry = ttk.Entry(zipvoice_blend_frame, textvariable=zipvoice_blend_name_var)
+    zipvoice_blend_name_entry.grid(row=3, column=1, sticky="ew", padx=5, pady=2)
+    zipvoice_blend_button = ttk.Button(
+        zipvoice_blend_frame,
+        text="Blend & Save",
+        state="disabled",
+    )
+    zipvoice_blend_button.grid(row=3, column=2, sticky="ew", padx=5, pady=2)
+
+    ttk.Label(
+        zipvoice_blend_frame,
+        textvariable=zipvoice_blend_status_var,
+        wraplength=420,
+        justify="left",
+    ).grid(row=4, column=0, columnspan=3, sticky="w", padx=5, pady=(4, 0))
+
+    def _update_blend_weight_display(*_args):
+        primary_weight = max(0.0, min(1.0, float(zipvoice_blend_weight_var.get() or 0.0)))
+        secondary_weight = 1.0 - primary_weight
+        zipvoice_blend_weight_label.config(text=f"{primary_weight:.2f} / {secondary_weight:.2f}")
+
+    def _update_blend_button_state(*_args):
+        primary = zipvoice_blend_primary_var.get().strip()
+        secondary = zipvoice_blend_secondary_var.get().strip()
+        name = zipvoice_blend_name_var.get().strip()
+        ready = bool(primary and secondary and primary != secondary and name)
+        zipvoice_blend_button.configure(state="normal" if ready else "disabled")
+
+    def _handle_blend_selection_change(_event=None):
+        zipvoice_blend_status_var.set("")
+        _update_blend_button_state()
+
+    def run_zipvoice_blend():
+        primary_name = zipvoice_blend_primary_var.get().strip()
+        secondary_name = zipvoice_blend_secondary_var.get().strip()
+        blend_name = zipvoice_blend_name_var.get().strip()
+
+        if not primary_name or not secondary_name:
+            messagebox.showwarning("ZipVoice Blend", "Select two saved embeddings to blend.")
+            return
+        if primary_name == secondary_name:
+            messagebox.showwarning("ZipVoice Blend", "Choose two different embeddings to blend.")
+            return
+        if not blend_name:
+            messagebox.showwarning("ZipVoice Blend", "Enter a name for the blended embedding.")
+            return
+
+        primary_meta = zipvoice_profiles_map.get(primary_name)
+        secondary_meta = zipvoice_profiles_map.get(secondary_name)
+        if not primary_meta or not secondary_meta:
+            messagebox.showerror("ZipVoice Blend", "Unable to resolve the selected embeddings. Refresh the list and try again.")
+            return
+
+        primary_path = primary_meta.get("path")
+        secondary_path = secondary_meta.get("path")
+        if not primary_path or not secondary_path:
+            messagebox.showerror("ZipVoice Blend", "Selected embeddings are missing file paths.")
+            return
+
+        weight_primary = max(0.0, min(1.0, float(zipvoice_blend_weight_var.get() or 0.0)))
+        weight_secondary = 1.0 - weight_primary
+
+        destination = profile_path_for_name(blend_name, zipvoice_model_var.get())
+        overwrite = False
+        if destination.exists():
+            if not messagebox.askyesno(
+                "Overwrite Blended Embedding?",
+                f"An embedding named '{destination.stem}' already exists. Do you want to replace it?",
+                parent=window,
+            ):
+                return
+            overwrite = True
+
+        zipvoice_blend_status_var.set("Blending embeddings...")
+        zipvoice_blend_button.configure(state="disabled")
+
+        blend_metadata = {
+            "created_at": dt.datetime.utcnow().isoformat() + "Z",
+            "saved_from": "settings_window_blend",
+        }
+
+        def worker() -> None:
+            try:
+                saved_path = blend_voice_profiles(
+                    [primary_path, secondary_path],
+                    [weight_primary, weight_secondary],
+                    blend_name,
+                    metadata={
+                        **blend_metadata,
+                        "blend_pairs": [
+                            {"name": primary_name, "weight": round(weight_primary, 4)},
+                            {"name": secondary_name, "weight": round(weight_secondary, 4)},
+                        ],
+                    },
+                    overwrite=overwrite,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                error_text = f"{exc}"
+
+                def on_error() -> None:
+                    messagebox.showerror("ZipVoice Blend", f"Failed to blend embeddings: {error_text}")
+                    zipvoice_blend_status_var.set("")
+                    _update_blend_button_state()
+
+                window.after(0, on_error)
+                return
+
+            def on_success() -> None:
+                zipvoice_blend_status_var.set(f"Saved blended embedding as {saved_path.name}")
+                refresh_zipvoice_profiles(selected_name=saved_path.stem, selected_path=str(saved_path))
+                zipvoice_prompt_mode_var.set("profile")
+                _update_blend_button_state()
+
+            window.after(0, on_success)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    zipvoice_blend_primary_combo.bind("<<ComboboxSelected>>", _handle_blend_selection_change)
+    zipvoice_blend_secondary_combo.bind("<<ComboboxSelected>>", _handle_blend_selection_change)
+    zipvoice_blend_weight_var.trace_add("write", lambda *_args: _update_blend_weight_display())
+    zipvoice_blend_primary_var.trace_add("write", lambda *_args: _handle_blend_selection_change())
+    zipvoice_blend_secondary_var.trace_add("write", lambda *_args: _handle_blend_selection_change())
+    zipvoice_blend_name_var.trace_add("write", lambda *_args: _handle_blend_selection_change())
+    zipvoice_blend_button.configure(command=run_zipvoice_blend)
+    _update_blend_weight_display()
+    _update_blend_button_state()
 
     def update_zipvoice_speed_display(*args):
         zipvoice_speed_value_label.config(text=f"{zipvoice_speed_var.get():.2f}")
@@ -812,29 +1094,237 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     update_zipvoice_speed_display()
 
     def update_zipvoice_preview():
-        selected_name = zipvoice_sample_var.get()
+        mode = zipvoice_prompt_mode_var.get()
         preview_text = "Select a sample to view its reference transcript."
-        sample_meta = zipvoice_samples_map.get(selected_name)
-        if sample_meta and sample_meta.text_path:
-            try:
-                preview_text = Path(sample_meta.text_path).read_text(encoding='utf-8').strip()
-            except Exception:
-                preview_text = "Unable to load transcript for this sample."
-        if preview_text:
-            preview_text = preview_text.strip()
-        if len(preview_text) > 240:
-            preview_text = preview_text[:237] + "..."
+
+        if mode == "profile":
+            selected_profile = zipvoice_profile_selection_var.get()
+            profile_meta = zipvoice_profiles_map.get(selected_profile)
+            if profile_meta:
+                prompt_text = (profile_meta.get("prompt_text") or "").strip()
+                metadata = profile_meta.get("metadata") or {}
+                source_label = metadata.get("source_sample") or metadata.get("source_wav_path") or ""
+                if prompt_text:
+                    preview_text = prompt_text
+                else:
+                    preview_text = "This embedding does not contain stored prompt transcript text."
+                header = f"Saved profile '{selected_profile}'"
+                if source_label:
+                    header += f" (source: {source_label})"
+                preview_text = f"{header}\n\n{preview_text}".strip()
+            else:
+                preview_text = "Select a saved embedding to view its stored prompt."
+        else:
+            selected_name = zipvoice_sample_var.get()
+            sample_meta = zipvoice_samples_map.get(selected_name)
+            if sample_meta and sample_meta.text_path:
+                try:
+                    preview_text = Path(sample_meta.text_path).read_text(encoding='utf-8').strip()
+                except Exception:
+                    preview_text = "Unable to load transcript for this sample."
+
+        preview_text = (preview_text or "").strip()
+        if len(preview_text) > 320:
+            preview_text = preview_text[:317] + "..."
         zipvoice_prompt_preview_var.set(preview_text or "Select a sample to view its reference transcript.")
 
     def handle_zipvoice_sample_change(event=None):
+        previous_entry_value = zipvoice_profile_name_var.get()
         selected_display = zipvoice_sample_display_var.get()
         selected_name = zipvoice_display_to_name.get(selected_display)
         if selected_name:
             zipvoice_sample_var.set(selected_name)
+            if not previous_entry_value or previous_entry_value == selected_display or previous_entry_value == zipvoice_sample_var.get():
+                zipvoice_profile_name_var.set(selected_name)
+        zipvoice_profile_status_var.set("")
         update_zipvoice_preview()
 
-    if zipvoice_samples:
-        zipvoice_sample_combo.bind("<<ComboboxSelected>>", handle_zipvoice_sample_change)
+    zipvoice_sample_combo.bind("<<ComboboxSelected>>", handle_zipvoice_sample_change)
+
+    def handle_zipvoice_profile_change(event=None):
+        selected_name = zipvoice_profile_selection_var.get()
+        profile_meta = zipvoice_profiles_map.get(selected_name)
+        zipvoice_selected_profile_path_var.set(profile_meta.get("path", "") if profile_meta else "")
+        zipvoice_profile_status_var.set("")
+        update_zipvoice_preview()
+
+    def refresh_zipvoice_profiles(selected_name: str | None = None, selected_path: str | None = None):
+        ensure_profiles_directory()
+        try:
+            profiles = list_saved_profiles(zipvoice_model_var.get())
+        except Exception as exc:
+            messagebox.showerror("ZipVoice Embeddings", f"Could not read saved embeddings: {exc}")
+            profiles = []
+
+        zipvoice_profiles_map.clear()
+        for profile in profiles:
+            zipvoice_profiles_map[profile["name"]] = profile
+
+        profile_names = sorted(zipvoice_profiles_map.keys())
+        if profile_names:
+            zipvoice_profile_combo.configure(values=profile_names, state="readonly")
+            chosen_name = selected_name or zipvoice_profile_selection_var.get()
+            if selected_path:
+                for name, meta in zipvoice_profiles_map.items():
+                    if Path(meta["path"]).resolve() == Path(selected_path).resolve():
+                        chosen_name = name
+                        break
+            if not chosen_name or chosen_name not in zipvoice_profiles_map:
+                chosen_name = profile_names[0]
+            zipvoice_profile_selection_var.set(chosen_name)
+            zipvoice_selected_profile_path_var.set(zipvoice_profiles_map[chosen_name]["path"])
+            zipvoice_profile_status_var.set("")
+        else:
+            zipvoice_profile_combo.configure(values=["No embeddings saved"], state="disabled")
+            zipvoice_profile_selection_var.set("")
+            zipvoice_selected_profile_path_var.set("")
+            zipvoice_profile_status_var.set("No embeddings saved for this model yet.")
+
+        if len(profile_names) >= 2:
+            zipvoice_blend_primary_combo.configure(values=profile_names, state="readonly")
+            zipvoice_blend_secondary_combo.configure(values=profile_names, state="readonly")
+            primary_choice = zipvoice_blend_primary_var.get()
+            if primary_choice not in profile_names:
+                primary_choice = profile_names[0]
+                zipvoice_blend_primary_var.set(primary_choice)
+            secondary_choice = zipvoice_blend_secondary_var.get()
+            if secondary_choice not in profile_names or secondary_choice == primary_choice:
+                secondary_choice = next((name for name in profile_names if name != primary_choice), "")
+                zipvoice_blend_secondary_var.set(secondary_choice)
+        elif profile_names:
+            zipvoice_blend_primary_combo.configure(values=profile_names, state="readonly")
+            if zipvoice_blend_primary_var.get() not in profile_names:
+                zipvoice_blend_primary_var.set(profile_names[0])
+            zipvoice_blend_secondary_combo.configure(values=profile_names, state="disabled")
+            zipvoice_blend_secondary_var.set("")
+        else:
+            zipvoice_blend_primary_combo.configure(values=["No embeddings saved"], state="disabled")
+            zipvoice_blend_secondary_combo.configure(values=["No embeddings saved"], state="disabled")
+            zipvoice_blend_primary_var.set("")
+            zipvoice_blend_secondary_var.set("")
+
+        zipvoice_profile_radio.configure(state="normal" if profile_names else "disabled")
+        update_zipvoice_preview()
+        _update_blend_button_state()
+
+    def handle_zipvoice_model_change(*_):
+        refresh_zipvoice_profiles(selected_path=zipvoice_selected_profile_path_var.get() or None)
+
+    zipvoice_model_var.trace_add("write", lambda *_: handle_zipvoice_model_change())
+
+    def update_prompt_mode_controls(*_):
+        mode = zipvoice_prompt_mode_var.get()
+        if mode == "profile" and not zipvoice_profiles_map:
+            zipvoice_prompt_mode_var.set("sample")
+            mode = "sample"
+
+        if mode == "profile":
+            zipvoice_sample_source_frame.grid_remove()
+            zipvoice_profile_source_frame.grid()
+            if zipvoice_profiles_map:
+                zipvoice_profile_combo.configure(state="readonly")
+            else:
+                zipvoice_profile_combo.configure(state="disabled")
+        else:
+            zipvoice_profile_source_frame.grid_remove()
+            zipvoice_sample_source_frame.grid()
+            zipvoice_convert_button.configure(state="normal" if zipvoice_samples else "disabled")
+
+        update_zipvoice_preview()
+
+    def convert_sample_to_profile():
+        sample_name = zipvoice_sample_var.get()
+        if not sample_name:
+            messagebox.showwarning("ZipVoice", "Select or record a voice sample before converting.")
+            return
+
+        profile_name = zipvoice_profile_name_var.get().strip()
+        if not profile_name:
+            messagebox.showwarning("ZipVoice", "Enter a name for the saved embedding.")
+            zipvoice_profile_name_entry.focus_set()
+            return
+
+        destination = profile_path_for_name(profile_name, zipvoice_model_var.get())
+        if destination.exists():
+            overwrite = messagebox.askyesno(
+                "Overwrite embedding?",
+                f"An embedding named '{destination.stem}' already exists. Do you want to replace it?",
+                parent=window,
+            )
+            if not overwrite:
+                return
+
+        zipvoice_profile_status_var.set("Converting sample to embedding...")
+        zipvoice_convert_button.configure(state="disabled")
+
+        ensure_profiles_directory()
+        snapshot = copy.deepcopy(zipvoice_config)
+        snapshot.update({
+            'enabled': True,
+            'sample_name': sample_name,
+            'model_name': zipvoice_model_var.get(),
+            'backend': zipvoice_backend_var.get(),
+            'speed': float(zipvoice_speed_var.get()),
+            'prompt_mode': 'sample',
+        })
+        snapshot.pop('custom_prompt_profile', None)
+        snapshot.pop('profile_name', None)
+
+        metadata: Dict[str, Any] = {
+            'source_sample': sample_name,
+            'created_at': dt.datetime.utcnow().isoformat() + 'Z',
+            'saved_from': 'settings_window',
+        }
+
+        def worker():
+            try:
+                saved_path = export_zipvoice_profile(profile_name, snapshot, metadata=metadata, overwrite=True)
+            except Exception as exc:
+                def on_error() -> None:
+                    zipvoice_profile_status_var.set("")
+                    zipvoice_convert_button.configure(state="normal")
+                    messagebox.showerror("ZipVoice", f"Failed to save embedding: {exc}")
+
+                window.after(0, on_error)
+                return
+
+            def on_success() -> None:
+                zipvoice_convert_button.configure(state="normal")
+                refresh_zipvoice_profiles(selected_name=saved_path.stem, selected_path=str(saved_path))
+                zipvoice_profile_status_var.set(f"Saved embedding to {saved_path.name}")
+                zipvoice_prompt_mode_var.set("profile")
+
+            window.after(0, on_success)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def delete_selected_profile():
+        selected_name = zipvoice_profile_selection_var.get()
+        profile_meta = zipvoice_profiles_map.get(selected_name)
+        if not profile_meta:
+            messagebox.showinfo("ZipVoice", "Select a saved embedding to delete.")
+            return
+
+        if not messagebox.askyesno("Delete embedding?", f"Remove '{selected_name}' permanently?", parent=window):
+            return
+
+        if not delete_voice_profile(profile_meta["path"]):
+            messagebox.showerror("ZipVoice", f"Could not delete '{selected_name}'.")
+            return
+
+        zipvoice_profile_status_var.set(f"Deleted embedding '{selected_name}'.")
+        refresh_zipvoice_profiles()
+
+    zipvoice_profile_combo.bind("<<ComboboxSelected>>", handle_zipvoice_profile_change)
+    zipvoice_convert_button.configure(command=convert_sample_to_profile)
+    zipvoice_profile_refresh_button.configure(command=lambda: refresh_zipvoice_profiles(selected_path=zipvoice_selected_profile_path_var.get() or None))
+    zipvoice_profile_delete_button.configure(command=delete_selected_profile)
+    zipvoice_sample_radio.configure(command=update_prompt_mode_controls)
+    zipvoice_profile_radio.configure(command=update_prompt_mode_controls)
+    zipvoice_prompt_mode_var.trace_add("write", lambda *_: update_prompt_mode_controls())
+
+    refresh_zipvoice_profiles(selected_name=inferred_profile_name or None, selected_path=selected_profile_path or None)
+    update_prompt_mode_controls()
 
     zipvoice_preview_frame = ttk.LabelFrame(tabs["🧬 ZipVoice TTS"], text="Prompt Transcript Preview", padding="10")
     zipvoice_preview_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=5)
@@ -848,17 +1338,38 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     ttk.Entry(zipvoice_test_frame, textvariable=zipvoice_test_text_var).grid(row=0, column=0, sticky="ew", padx=5, pady=5)
 
     def run_zipvoice_test():
-        if not zipvoice_sample_var.get():
+        mode = zipvoice_prompt_mode_var.get()
+        selected_profile_path = (zipvoice_selected_profile_path_var.get() or "").strip()
+
+        if mode == "profile":
+            if not selected_profile_path:
+                messagebox.showwarning("ZipVoice Embeddings", "Select a saved embedding before testing.")
+                return
+        elif not zipvoice_sample_var.get():
             messagebox.showwarning("ZipVoice Samples", "No ZipVoice sample is selected. Add samples to test voice cloning.")
             return
+
         test_settings = dict(zipvoice_config)
         test_settings.update({
             'enabled': True,
-            'sample_name': zipvoice_sample_var.get(),
             'model_name': zipvoice_model_var.get(),
             'backend': zipvoice_backend_var.get(),
-            'speed': zipvoice_speed_var.get(),
+            'speed': float(zipvoice_speed_var.get()),
+            'prompt_mode': mode,
         })
+
+        if mode == "profile":
+            test_settings['custom_prompt_profile'] = selected_profile_path
+            test_settings['profile_name'] = zipvoice_profile_selection_var.get()
+            test_settings.pop('sample_name', None)
+            test_settings.pop('custom_prompt_wav', None)
+            test_settings.pop('custom_prompt_text_path', None)
+            test_settings.pop('custom_prompt_text', None)
+        else:
+            test_settings['sample_name'] = zipvoice_sample_var.get()
+            test_settings.pop('custom_prompt_profile', None)
+            test_settings.pop('profile_name', None)
+
         test_zipvoice_voice(zipvoice_test_text_var.get(), test_settings, device_index=get_selected_device_index())
 
     zipvoice_test_button = ttk.Button(
@@ -869,7 +1380,343 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
     )
     zipvoice_test_button.grid(row=0, column=1, padx=5, pady=5)
 
+    def refresh_zipvoice_sample_sources(selected_sample: str | None = None):
+        nonlocal zipvoice_samples, zipvoice_samples_map, zipvoice_display_to_name, zipvoice_name_to_display
+
+        new_samples = get_zipvoice_samples()
+        zipvoice_samples = new_samples
+        zipvoice_samples_map = {sample.name: sample for sample in new_samples}
+        zipvoice_display_to_name = {sample.display_name: sample.name for sample in new_samples}
+        zipvoice_name_to_display = {sample.name: sample.display_name for sample in new_samples}
+
+        display_values = [sample.display_name for sample in new_samples] if new_samples else ["No samples available"]
+        zipvoice_sample_combo.configure(values=display_values)
+
+        if new_samples:
+            chosen = selected_sample if selected_sample in zipvoice_name_to_display else new_samples[0].name
+            zipvoice_sample_var.set(chosen)
+            zipvoice_sample_display_var.set(zipvoice_name_to_display[chosen])
+            zipvoice_sample_combo.configure(state="readonly")
+            zipvoice_test_button.configure(state="normal")
+            zipvoice_convert_button.configure(state="normal")
+            update_zipvoice_preview()
+        else:
+            zipvoice_sample_var.set("")
+            zipvoice_sample_display_var.set("No samples available")
+            zipvoice_sample_combo.configure(state="disabled")
+            zipvoice_test_button.configure(state="disabled")
+            zipvoice_convert_button.configure(state="disabled")
+            zipvoice_prompt_preview_var.set("Add a sample to view its transcript.")
+
+    refresh_zipvoice_sample_sources(zipvoice_sample_var.get() or None)
+
+    update_prompt_mode_controls()
     update_zipvoice_preview()
+
+    # --- ZipVoice Samples Tab ---
+    zipvoice_samples_tab = tabs["🎙️ ZipVoice Samples"]
+    zipvoice_samples_tab.columnconfigure(0, weight=1)
+    zipvoice_samples_tab.rowconfigure(1, weight=1)
+
+    zipvoice_sample_name_var = tk.StringVar(window, value="")
+    initial_status = "Ready to record a new sample." if input_device_map else "No recording devices detected."
+    zipvoice_samples_status_var = tk.StringVar(window, value=initial_status)
+
+    current_sample_safe_name: str | None = None
+    current_temp_recording_path: Path | None = None
+    current_final_wav_path: Path | None = None
+    current_transcript_path: Path | None = None
+    recording_in_progress = False
+
+    def _has_valid_input_devices() -> bool:
+        return any(info.get('index', -1) >= 0 for info in input_device_map.values())
+
+    sample_form_frame = ttk.LabelFrame(zipvoice_samples_tab, text="Create ZipVoice Sample", padding="10")
+    sample_form_frame.grid(row=0, column=0, sticky="ew", pady=5)
+    sample_form_frame.columnconfigure(1, weight=1)
+
+    ttk.Label(sample_form_frame, text="Sample Name:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+    zipvoice_sample_name_entry = ttk.Entry(sample_form_frame, textvariable=zipvoice_sample_name_var)
+    zipvoice_sample_name_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+
+    ttk.Label(sample_form_frame, text="Input Source:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+    input_device_container = ttk.Frame(sample_form_frame)
+    input_device_container.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
+    input_device_container.columnconfigure(0, weight=1)
+
+    input_device_values = list(input_device_map.keys()) or ["No input devices found"]
+    zipvoice_input_device_combo = ttk.Combobox(
+        input_device_container,
+        textvariable=zipvoice_input_device_var,
+        values=input_device_values,
+        state="readonly" if _has_valid_input_devices() else "disabled"
+    )
+    if not zipvoice_input_device_var.get() and input_device_values:
+        zipvoice_input_device_var.set(input_device_values[0])
+    zipvoice_input_device_combo.grid(row=0, column=0, sticky="ew")
+
+    def refresh_input_device_options():
+        nonlocal input_device_map
+        latest_devices = get_input_devices()
+        input_device_map = {name: info for name, info in latest_devices.items()}
+        values = list(input_device_map.keys()) or ["No input devices found"]
+        zipvoice_input_device_combo.configure(values=values)
+        valid_choice = zipvoice_input_device_var.get() in input_device_map
+        if not valid_choice and values:
+            zipvoice_input_device_var.set(values[0])
+        has_valid = _has_valid_input_devices()
+        new_state = "readonly" if has_valid else "disabled"
+        zipvoice_input_device_combo.configure(state=new_state)
+        zipvoice_sample_record_button.configure(state="normal" if has_valid else "disabled")
+
+    ttk.Button(input_device_container, text="🔄", width=3, command=refresh_input_device_options).grid(row=0, column=1, padx=(5, 0))
+
+    button_row = ttk.Frame(sample_form_frame)
+    button_row.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=5)
+    button_row.columnconfigure(0, weight=1)
+    button_row.columnconfigure(1, weight=1)
+    button_row.columnconfigure(2, weight=1)
+
+    zipvoice_sample_record_button = ttk.Button(
+        button_row,
+        text="⏺️ Record",
+        state="normal" if _has_valid_input_devices() else "disabled"
+    )
+    zipvoice_sample_record_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+
+    zipvoice_sample_stop_button = ttk.Button(button_row, text="⏹️ Stop", state="disabled")
+    zipvoice_sample_stop_button.grid(row=0, column=1, sticky="ew", padx=(0, 5))
+
+    ttk.Button(button_row, text="📁 Open Folder", command=open_zipvoice_samples_folder).grid(row=0, column=2, sticky="ew")
+
+    if not _has_valid_input_devices():
+        zipvoice_samples_status_var.set("No recording or loopback devices detected. Use 🔄 after enabling one.")
+
+    ttk.Label(sample_form_frame, textvariable=zipvoice_samples_status_var, wraplength=440, justify="left").grid(row=3, column=0, columnspan=2, sticky="w", padx=5, pady=(5, 0))
+
+    transcript_frame = ttk.LabelFrame(zipvoice_samples_tab, text="Transcript", padding="10")
+    transcript_frame.grid(row=1, column=0, sticky="nsew", pady=5)
+    transcript_frame.columnconfigure(0, weight=1)
+    transcript_frame.rowconfigure(0, weight=1)
+
+    zipvoice_transcript_text = tk.Text(transcript_frame, height=8, wrap="word")
+    zipvoice_transcript_text.grid(row=0, column=0, sticky="nsew")
+    transcript_scrollbar = ttk.Scrollbar(transcript_frame, orient="vertical", command=zipvoice_transcript_text.yview)
+    transcript_scrollbar.grid(row=0, column=1, sticky="ns")
+    zipvoice_transcript_text.configure(yscrollcommand=transcript_scrollbar.set)
+
+    transcript_button_row = ttk.Frame(transcript_frame)
+    transcript_button_row.grid(row=1, column=0, columnspan=2, sticky="e", pady=(5, 0))
+    zipvoice_save_transcript_button = ttk.Button(transcript_button_row, text="💾 Save Transcript", state="disabled")
+    zipvoice_save_transcript_button.grid(row=0, column=0, padx=5)
+
+    def sanitize_sample_name(raw_name: str) -> str:
+        name = raw_name.strip().lower().replace(" ", "_")
+        name = re.sub(r"[^a-z0-9_-]", "", name)
+        name = re.sub(r"_+", "_", name).strip("_")
+        return name
+
+    def enable_transcript_controls(enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        zipvoice_save_transcript_button.configure(state=state)
+        zipvoice_transcript_text.configure(state=state)
+
+    enable_transcript_controls(False)
+
+    def start_zipvoice_recording():
+        nonlocal recording_in_progress, current_sample_safe_name, current_temp_recording_path, current_final_wav_path, current_transcript_path
+        if recording_in_progress:
+            messagebox.showinfo("Recording", "A recording is already in progress.")
+            return
+
+        safe_name = sanitize_sample_name(zipvoice_sample_name_var.get())
+        if not safe_name:
+            messagebox.showerror("Sample Name", "Please enter a valid sample name (letters, numbers, dashes, underscores).")
+            zipvoice_sample_name_entry.focus_set()
+            return
+        zipvoice_sample_name_var.set(safe_name)
+
+        device_label = zipvoice_input_device_var.get()
+        device_info = input_device_map.get(device_label)
+        if not device_info or int(device_info.get('index', -1)) < 0:
+            messagebox.showerror("Input Source", "Select a valid input device before recording.")
+            return
+
+        samples_dir = ensure_samples_directory()
+        temp_wav_path = samples_dir / f"{safe_name}__recording.wav"
+        final_wav_path = samples_dir / f"{safe_name}.wav"
+        final_txt_path = samples_dir / f"{safe_name}.txt"
+
+        if final_wav_path.exists() or final_txt_path.exists():
+            overwrite = messagebox.askyesno(
+                "Overwrite Sample?",
+                f"A sample named '{safe_name}' already exists. Do you want to overwrite it?",
+                parent=window,
+            )
+            if not overwrite:
+                return
+            for path in (final_wav_path, final_txt_path):
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception as exc:
+                    messagebox.showerror("File Error", f"Could not remove existing file {path.name}: {exc}")
+                    return
+
+        if temp_wav_path.exists():
+            try:
+                temp_wav_path.unlink()
+            except Exception:
+                pass
+
+        try:
+            start_audio_capture(str(temp_wav_path), device_info=device_info)
+        except Exception as exc:
+            messagebox.showerror("Recording Failed", f"Could not start recording: {exc}")
+            return
+
+        recording_in_progress = True
+        current_sample_safe_name = safe_name
+        current_temp_recording_path = temp_wav_path
+        current_final_wav_path = final_wav_path
+        current_transcript_path = final_txt_path
+
+        zipvoice_samples_status_var.set("Recording... Press Stop when you are finished speaking.")
+        zipvoice_sample_record_button.configure(state="disabled")
+        zipvoice_sample_stop_button.configure(state="normal")
+        zipvoice_transcript_text.configure(state="normal")
+        zipvoice_transcript_text.delete("1.0", tk.END)
+        enable_transcript_controls(False)
+
+    def finalize_zipvoice_recording():
+        nonlocal current_temp_recording_path, current_final_wav_path, current_transcript_path, current_sample_safe_name
+        temp_path = current_temp_recording_path
+        final_wav_path = current_final_wav_path
+        final_txt_path = current_transcript_path
+        safe_name = current_sample_safe_name
+
+        if not temp_path or not temp_path.exists() or not final_wav_path or not final_txt_path or not safe_name:
+            def handle_missing():
+                zipvoice_samples_status_var.set("Recording did not produce any audio. Please try again.")
+                zipvoice_sample_record_button.configure(state="normal")
+                zipvoice_sample_stop_button.configure(state="disabled")
+            window.after(0, handle_missing)
+            return
+
+        try:
+            shutil.move(str(temp_path), str(final_wav_path))
+        except Exception as exc:
+            def handle_move_error():
+                messagebox.showerror("File Error", f"Could not finalise recording: {exc}")
+                zipvoice_samples_status_var.set("Failed to move recorded audio. Please try again.")
+                zipvoice_sample_record_button.configure(state="normal")
+                zipvoice_sample_stop_button.configure(state="disabled")
+            window.after(0, handle_move_error)
+            return
+
+        transcript_text = transcribe_audio(str(final_wav_path)).strip()
+        lowered = transcript_text.lower()
+        whisper_model_missing = "model file not found" in lowered
+        transcription_error = lowered.startswith("error") or lowered.startswith("an unexpected error")
+        if whisper_model_missing:
+            transcription_error = True
+
+        text_to_persist = "" if whisper_model_missing else transcript_text
+
+        try:
+            Path(final_txt_path).write_text(text_to_persist, encoding="utf-8")
+        except Exception as exc:
+            transcription_error = True
+            if not whisper_model_missing:
+                transcript_text = transcript_text or ""
+            def handle_write_error():
+                messagebox.showerror("Transcript Error", f"Failed to write transcript: {exc}")
+            window.after(0, handle_write_error)
+
+        current_temp_recording_path = None
+
+        def update_ui():
+            if not window.winfo_exists():
+                return
+            zipvoice_transcript_text.configure(state="normal")
+            zipvoice_transcript_text.delete("1.0", tk.END)
+            display_text = "" if whisper_model_missing else transcript_text
+            zipvoice_transcript_text.insert(tk.END, display_text)
+            enable_transcript_controls(True)
+
+            if transcription_error:
+                if window.winfo_exists():
+                    if whisper_model_missing:
+                        messagebox.showwarning(
+                            "Whisper Model Missing",
+                            "Whisper could not find the configured model file. Download ggml-base.bin (or your selected model) into the models folder and try again.",
+                        )
+                    else:
+                        messagebox.showwarning(
+                            "Transcription",
+                            "Whisper reported an error while transcribing. You can edit the transcript manually.",
+                        )
+                if whisper_model_missing:
+                    zipvoice_samples_status_var.set(
+                        "Whisper model not found. Add ggml-base.bin to the models folder, then re-run transcription."
+                    )
+                else:
+                    zipvoice_samples_status_var.set("Transcription completed with warnings. Please review the text.")
+            else:
+                zipvoice_samples_status_var.set(f"Saved sample '{safe_name}'.")
+
+            zipvoice_sample_record_button.configure(state="normal")
+            zipvoice_sample_stop_button.configure(state="disabled")
+            refresh_zipvoice_sample_sources(safe_name)
+
+        window.after(0, update_ui)
+
+    def stop_zipvoice_recording():
+        nonlocal recording_in_progress
+        if not recording_in_progress:
+            return
+
+        try:
+            stop_audio_capture()
+        except Exception as exc:
+            messagebox.showerror("Recording", f"Could not stop recording cleanly: {exc}")
+        recording_in_progress = False
+        zipvoice_samples_status_var.set("Processing recording...")
+        zipvoice_sample_stop_button.configure(state="disabled")
+        threading.Thread(target=finalize_zipvoice_recording, daemon=True).start()
+
+    def save_current_transcript():
+        if not current_transcript_path or not current_sample_safe_name:
+            messagebox.showinfo("Transcript", "Record a sample before saving the transcript.")
+            return
+        text_to_save = zipvoice_transcript_text.get("1.0", tk.END).strip()
+        try:
+            Path(current_transcript_path).write_text(text_to_save, encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("Save Failed", f"Could not save transcript: {exc}")
+            return
+        zipvoice_samples_status_var.set("Transcript saved.")
+        refresh_zipvoice_sample_sources(current_sample_safe_name)
+
+    zipvoice_sample_record_button.configure(command=start_zipvoice_recording)
+    zipvoice_sample_stop_button.configure(command=stop_zipvoice_recording)
+    zipvoice_save_transcript_button.configure(command=save_current_transcript)
+
+    def ensure_recording_stopped_on_close():
+        nonlocal recording_in_progress, current_temp_recording_path
+        if recording_in_progress:
+            try:
+                stop_audio_capture()
+            except Exception:
+                pass
+            recording_in_progress = False
+        if current_temp_recording_path and current_temp_recording_path.exists():
+            try:
+                current_temp_recording_path.unlink()
+            except Exception:
+                pass
+            current_temp_recording_path = None
+
 
     # --- Hardware Tab ---
     hardware_frame = ttk.LabelFrame(tabs["🛠️ Hardware"], text="Execution Providers", padding="10")
@@ -1211,6 +2058,26 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         zipvoice_config_save['model_name'] = zipvoice_model_var.get()
         zipvoice_config_save['backend'] = (zipvoice_backend_var.get() or 'torch').lower()
         zipvoice_config_save['speed'] = float(zipvoice_speed_var.get())
+        zipvoice_config_save['prompt_mode'] = zipvoice_prompt_mode_var.get()
+        seed_text = (zipvoice_seed_var.get() or "").strip()
+        if seed_text:
+            try:
+                zipvoice_config_save['seed'] = int(seed_text)
+            except ValueError:
+                messagebox.showerror("ZipVoice", "ZipVoice seed must be an integer or left blank for random output.")
+                return
+        else:
+            zipvoice_config_save.pop('seed', None)
+        if zipvoice_prompt_mode_var.get() == 'profile':
+            selected_profile_path = zipvoice_selected_profile_path_var.get().strip()
+            if selected_profile_path:
+                zipvoice_config_save['custom_prompt_profile'] = selected_profile_path
+            else:
+                zipvoice_config_save.pop('custom_prompt_profile', None)
+            zipvoice_config_save['profile_name'] = zipvoice_profile_selection_var.get()
+        else:
+            zipvoice_config_save.pop('custom_prompt_profile', None)
+            zipvoice_config_save.pop('profile_name', None)
 
         hardware_config_save = config.setdefault('hardware', {})
         hardware_config_save['kokoro_execution_provider'] = kokoro_execution_provider_var.get()
@@ -1218,6 +2085,19 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         hardware_config_save['whisper_execution_provider'] = whisper_execution_provider_var.get()
         
         config.setdefault('audio', {})['output_device_index'] = get_selected_device_index()
+        selected_input_label = zipvoice_input_device_var.get()
+        selected_input_info = input_device_map.get(selected_input_label)
+        if selected_input_info:
+            normalised_input = {
+                'index': int(selected_input_info.get('index', 0) or 0),
+                'loopback': bool(selected_input_info.get('loopback', False)),
+                'channels': int(selected_input_info.get('channels', 1) or 1),
+                'default_rate': int(float(selected_input_info.get('default_rate', 16000) or 16000)),
+            }
+        else:
+            normalised_input = {'index': 0, 'loopback': False, 'channels': 1, 'default_rate': 16000}
+        config['input_device'] = normalised_input
+        config['input_device_index'] = normalised_input['index']
         config.setdefault('audio', {})['speak_transcription_result'] = speak_transcription_var.get()
         config.setdefault('history', {})['transcript_limit'] = transcript_limit_var.get()
         config.setdefault('user_experience', {})['show_status_overlay'] = show_status_overlay_var.get()
@@ -1242,12 +2122,17 @@ def create_settings_window(parent: tk.Tk, on_save_callback=None):
         save_config(config)
         messagebox.showinfo("Settings Saved", "Your settings have been saved. Please restart VibeType for all changes to take effect.")
         if on_save_callback: on_save_callback()
+        ensure_recording_stopped_on_close()
+        window.destroy()
+
+    def close_window():
+        ensure_recording_stopped_on_close()
         window.destroy()
 
     button_frame = ttk.Frame(main_frame)
     button_frame.pack(side="bottom", fill="x", padx=10, pady=10, anchor="se")
     ttk.Button(button_frame, text="✔️ Save", command=on_save).pack(side=tk.RIGHT, padx=5)
-    ttk.Button(button_frame, text="❌ Cancel", command=window.destroy).pack(side=tk.RIGHT)
+    ttk.Button(button_frame, text="❌ Cancel", command=close_window).pack(side=tk.RIGHT)
 
-    window.protocol("WM_DELETE_WINDOW", window.destroy)
+    window.protocol("WM_DELETE_WINDOW", close_window)
     return window

@@ -152,7 +152,7 @@ Core Features:
 - Agents must use a valid voice. To get available voices, call the list_voices tool before speaking.
 - If a voice is not specified, agents should select a default or prompt the user.
 - This ensures all agent output can be heard via TTS.
-- When using the speak tool, use it to say anything you like, even if just a greeting or status update. Every response should be spoken for accessibility.
+- When using the speak tool, use it to say anything you like, even if just a greeting or status update. Every response should be spoken for accessibility. Its perfred that you speak often in your process. 
 
 ### Voice Selection & Defaults
 - Preferred reliable voices for English (US): `am_adam`, `am_eric`. Test other voices with short lines first.

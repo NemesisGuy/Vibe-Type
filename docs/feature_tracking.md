@@ -47,6 +47,12 @@ This document tracks the status of features and ongoing development. For informa
 - **Improved Hotkey Functionality:**
   - The "Read Selected Text" and "Speak from Clipboard" hotkeys now have distinct, reliable functions.
 
+- **ZipVoice voice profile persistence (experimental):**
+  - ZipVoice sessions can persist the prepared prompt embedding to a reusable `.pt` profile file.
+  - Settings → 🧬 ZipVoice TTS now includes a prompt source toggle (WAV vs. saved embedding), convert-to-embedding workflow, and saved profile dropdown.
+  - Profiles record prompt text, metadata, and runtime parameters to guarantee compatibility when reloaded.
+  - Saved profiles inherit a `_base` or `_distilled` suffix and the picker only shows embeddings for the active model variant, avoiding cross-model load errors.
+
 ---
 
 ## 📝 To-Do
@@ -55,6 +61,7 @@ This document tracks the status of features and ongoing development. For informa
 - **Resizable Settings Window:** Implement persistent state for the settings window size and position.
 - **Comprehensive Tests:** Create a comprehensive test suite that covers all major features and providers.
 - **Graceful TTS Fallback:** If a selected TTS engine fails to initialize or speak, the application should gracefully fall back to a default provider (e.g., Windows SAPI).
+- **ZipVoice voice profile polish:** Add management niceties (rename, duplicate, metadata editing) and integrate profile previews into the samples tab.
 
 ---
 
@@ -133,3 +140,37 @@ Success criteria
 - Mixed‑language passages are spoken end‑to‑end without crashes.
 - Logs clearly indicate selection source, chunk boundaries, and phoneme/G2P results (when enabled).
 - Log text is not spoken.
+
+## 2025-10-19 — ZipVoice prompt caching (experimental)
+
+Purpose: avoid recomputing ZipVoice prompt embeddings on every inference so the first chunk starts sooner.
+
+What changed (high-impact)
+- Added an on-disk cache under `%USERPROFILE%\.VibeType\cache\zipvoice_prompts` keyed by prompt wav/text + model settings.
+- `ZipVoiceStreamingSession.prepare_prompt` now loads cached tensors when available before touching the wav file.
+- Cache entries store the prompt features, token ids, RMS, and duration so the inference path can reuse them directly.
+
+Known gaps / follow up
+- The cache path is best-effort. If the directory cannot be created, the session silently falls back to the legacy behavior.
+- Needs a regression pass with multiple speakers/languages to confirm no drift in output quality (user deferred testing for now).
+- Keep an eye on the ZipVoice tokenizer polyglot changes; they are related and still marked as open.
+
+Bug tracker note (still open)
+- ZipVoice phonemizer/tokenizer regression after the Japanese G2P swap: occasionally mislabels segments when mixing Chinese + Japanese. Reproduce after more QA, then decide whether to add a dedicated fallback.
+
+## 2025-10-21 — ZipVoice voice profiles (experimental)
+
+Purpose: let power users reuse a warmed ZipVoice prompt instantly across sessions without reprocessing the original audio clip.
+
+What changed (high-impact)
+- `zipvoice_tts.session.ZipVoiceStreamingSession` now exposes `export_prompt_profile()` / `load_prompt_profile()` helpers that persist the prepared embedding bundle to disk.
+- `core.zipvoice_manager` adds utility helpers (`save_voice_profile`, `list_saved_profiles`, `profile_path_for_name`) and config resolution for `custom_prompt_profile`.
+- `core.tts.build_zipvoice_session` can boot a ZipVoice session directly from a saved profile, and the settings window surfaces prompt source selection plus a “Convert & Save” workflow.
+
+How to use it right now
+- In Settings → 🧬 ZipVoice TTS choose **Saved Embedding**, pick or create a profile, then synthesize or test as usual.
+- Alternatively warm a session via the API and call `core.zipvoice_manager.save_voice_profile(session, "my-voice")` to persist it under `%APPDATA%/../.VibeType/zipvoice_tts/profiles` for scripting workflows.
+
+Known gaps / follow up
+- Add profile management affordances (rename/delete confirmations, metadata editor) and expose embeddings on the Samples tab for quick access.
+- Validate compatibility checks across different GPU/CPU backends and document any migration steps for profile version bumps.

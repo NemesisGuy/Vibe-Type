@@ -17,7 +17,8 @@ import logging
 import re
 import queue
 import sounddevice as sd
-from typing import Tuple
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from zipvoice_tts import ZipVoiceStreamingSession
 
@@ -25,6 +26,7 @@ from core.zipvoice_manager import (
     ZipVoicePrompt,
     list_builtin_samples,
     resolve_prompt_from_config,
+    save_voice_profile,
 )
 
 from core.config_manager import load_config, save_config
@@ -41,6 +43,7 @@ zipvoice_tts_instance = None
 zipvoice_session_lock = threading.Lock()
 zipvoice_last_signature = None
 zipvoice_cached_prompt = None
+zipvoice_warm_tokens: set[tuple] = set()
 logger = logging.getLogger(__name__)
 
 # --- TTS Queue and Interrupt Handling ---
@@ -135,6 +138,9 @@ def _zipvoice_signature(zipvoice_config: dict) -> tuple:
         'backend',
         'model_name',
         'sample_name',
+        'prompt_mode',
+        'custom_prompt_profile',
+        'profile_name',
         'speed',
         'guidance_scale',
         'num_step',
@@ -164,8 +170,8 @@ def _resolve_path_candidate(value: str | None) -> str | None:
     return candidate
 
 
-def _build_zipvoice_session(zipvoice_config: dict) -> Tuple[ZipVoiceStreamingSession, ZipVoicePrompt]:
-    prompt = resolve_prompt_from_config(zipvoice_config)
+def build_zipvoice_session(zipvoice_config: dict) -> Tuple[ZipVoiceStreamingSession, ZipVoicePrompt]:
+    prompt_config = resolve_prompt_from_config(zipvoice_config)
 
     backend = (zipvoice_config.get('backend') or 'onnx').strip().lower()
     model_name = zipvoice_config.get('model_name', 'zipvoice') or 'zipvoice'
@@ -216,6 +222,18 @@ def _build_zipvoice_session(zipvoice_config: dict) -> Tuple[ZipVoiceStreamingSes
     remove_long_sil = bool(zipvoice_config.get('remove_long_sil', False))
     onnx_int8 = bool(zipvoice_config.get('onnx_int8', False))
 
+    seed_config = zipvoice_config.get('seed')
+    if isinstance(seed_config, str):
+        seed_config = seed_config.strip()
+    if seed_config in (None, ""):
+        seed_value: Optional[int] = None
+    else:
+        try:
+            seed_value = int(seed_config)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            logger.warning("Invalid ZipVoice seed %r; ignoring.", seed_config)
+            seed_value = None
+
     torch_device = zipvoice_config.get('torch_device') or None
     if isinstance(torch_device, str):
         torch_device = torch_device.strip() or None
@@ -241,10 +259,47 @@ def _build_zipvoice_session(zipvoice_config: dict) -> Tuple[ZipVoiceStreamingSes
         remove_long_sil=remove_long_sil,
         max_total_seconds=max_total_seconds,
         num_thread=num_thread,
+        seed=seed_value,
     )
 
-    session.prepare_prompt(prompt.wav_path, prompt.prompt_text)
+    if prompt_config.profile_path:
+        profile_metadata = session.load_prompt_profile(prompt_config.profile_path)
+        prompt = ZipVoicePrompt(
+            wav_path=None,
+            prompt_text=prompt_config.prompt_text,
+            profile_path=prompt_config.profile_path,
+            profile_metadata=profile_metadata,
+        )
+    else:
+        if not prompt_config.wav_path:
+            raise ValueError("ZipVoice prompt configuration missing 'wav' path.")
+        session.prepare_prompt(prompt_config.wav_path, prompt_config.prompt_text)
+        prompt = prompt_config
+
     return session, prompt
+
+
+def export_zipvoice_profile(
+    profile_name: str,
+    zipvoice_config: Mapping[str, Any],
+    metadata: Optional[Mapping[str, Any]] = None,
+    overwrite: bool = True,
+) -> Path:
+    """Build a temporary ZipVoice session and persist its prepared prompt."""
+
+    config_copy = dict(zipvoice_config)
+    session, prompt = build_zipvoice_session(config_copy)
+    try:
+        merged_metadata: Dict[str, Any] = dict(metadata or {})
+        if prompt.profile_path:
+            merged_metadata.setdefault("source_profile_path", prompt.profile_path)
+        if prompt.wav_path:
+            merged_metadata.setdefault("source_wav_path", prompt.wav_path)
+        merged_metadata.setdefault("model_name", config_copy.get("model_name"))
+        merged_metadata.setdefault("backend", config_copy.get("backend"))
+        return save_voice_profile(session, profile_name, metadata=merged_metadata, overwrite=overwrite)
+    finally:
+        session.close()
 
 
 def _initialize_zipvoice_tts(config: dict, force_rebuild: bool = False):
@@ -274,7 +329,7 @@ def _initialize_zipvoice_tts(config: dict, force_rebuild: bool = False):
             zipvoice_tts_instance = None
 
         try:
-            session, prompt = _build_zipvoice_session(zipvoice_config)
+            session, prompt = build_zipvoice_session(zipvoice_config)
         except Exception as exc:
             message = str(exc)
             if "Numpy is not available" in message or "NumPy" in message:
@@ -291,12 +346,32 @@ def _initialize_zipvoice_tts(config: dict, force_rebuild: bool = False):
         zipvoice_tts_instance = session
         zipvoice_last_signature = signature
         zipvoice_cached_prompt = prompt
+        prompt_mode = zipvoice_config.get('prompt_mode', 'sample')
+        prompt_descriptor = (
+            zipvoice_config.get('custom_prompt_profile')
+            if prompt_mode == 'profile'
+            else zipvoice_config.get('sample_name')
+        )
         logger.info(
-            "ZipVoice TTS ready with backend=%s, model=%s, sample=%s",
+            "ZipVoice TTS ready with backend=%s, model=%s, prompt_mode=%s, prompt=%s",
             zipvoice_config.get('backend', 'onnx'),
             zipvoice_config.get('model_name', 'zipvoice'),
-            zipvoice_config.get('sample_name'),
+            prompt_mode,
+            prompt_descriptor,
         )
+
+        def _background_warm() -> None:
+            try:
+                session.warm()
+                logger.info("ZipVoice session pre-warmed in background.")
+            except Exception:
+                logger.debug("ZipVoice background warm-up failed", exc_info=True)
+
+        warm_signature = signature + (("prompt_mode", zipvoice_config.get('prompt_mode')),)
+        if warm_signature not in zipvoice_warm_tokens:
+            zipvoice_warm_tokens.add(warm_signature)
+            threading.Thread(target=_background_warm, daemon=True).start()
+
         return zipvoice_tts_instance
 
 

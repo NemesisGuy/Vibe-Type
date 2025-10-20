@@ -29,6 +29,8 @@ from pypinyin.contrib.tone_convert import to_finals_tone3, to_initials
 
 from zipvoice.tokenizer.normalizer import ChineseTextNormalizer, EnglishTextNormalizer
 
+logger = logging.getLogger(__name__)
+
 try:
     from piper_phonemize import phonemize_espeak
     _PHONEMIZE_ERROR: Optional[BaseException] = None
@@ -266,6 +268,8 @@ class EmiliaTokenizer(Tokenizer):
                 seg = segments[index]
                 if seg[1] == "zh":
                     phoneme = self.tokenize_ZH(seg[0])
+                elif seg[1] == "ja":
+                    phoneme = self.tokenize_JA(seg[0])
                 elif seg[1] == "en":
                     phoneme = self.tokenize_EN(seg[0])
                 elif seg[1] == "pinyin":
@@ -332,6 +336,14 @@ class EmiliaTokenizer(Tokenizer):
             return tokens
         except Exception as ex:
             logging.warning(f"Tokenization of English texts failed: {ex}")
+            return []
+
+    def tokenize_JA(self, text: str) -> List[str]:
+        try:
+            tokens = phonemize_espeak(text, "ja")
+            return reduce(lambda x, y: x + y, tokens)
+        except Exception as ex:
+            logging.warning(f"Tokenization of Japanese texts failed: {ex}")
             return []
 
     def tokenize_pinyin(self, text: str) -> List[str]:
@@ -419,7 +431,11 @@ class EmiliaTokenizer(Tokenizer):
         text = _part_pattern.findall(text)
 
         for i, part in enumerate(text):
-            if self.is_chinese(part) or self.is_pinyin(part):
+            if self.is_pinyin(part):
+                types.append("zh")
+            elif self.is_japanese(part):
+                types.append("ja")
+            elif self.is_chinese(part):
                 types.append("zh")
             elif self.is_alphabet(part):
                 types.append("en")
@@ -475,7 +491,10 @@ class EmiliaTokenizer(Tokenizer):
                 elif self.is_tag(part):
                     result.append((part, "tag"))
                 else:
-                    result.append((part, temp_lang))
+                    lang = temp_lang
+                    if lang in ("zh", "other") and self.contains_japanese(part):
+                        lang = "ja"
+                    result.append((part, lang))
         return result
 
     def is_chinese(self, char: str) -> bool:
@@ -483,6 +502,25 @@ class EmiliaTokenizer(Tokenizer):
             return True
         else:
             return False
+
+    def is_japanese(self, char: str) -> bool:
+        if not char:
+            return False
+        code_point = ord(char[0])
+        if 0x3040 <= code_point <= 0x309F:
+            return True  # Hiragana
+        if 0x30A0 <= code_point <= 0x30FF:
+            return True  # Katakana
+        if 0x31F0 <= code_point <= 0x31FF:
+            return True  # Katakana Phonetic Extensions
+        if 0xFF66 <= code_point <= 0xFF9D:
+            return True  # Halfwidth Katakana
+        if char in {"ー", "々", "〆", "ゝ", "ゞ"}:
+            return True
+        return False
+
+    def contains_japanese(self, text: str) -> bool:
+        return any(self.is_japanese(ch) for ch in text)
 
     def is_alphabet(self, char: str) -> bool:
         if (char >= "\u0041" and char <= "\u005a") or (
